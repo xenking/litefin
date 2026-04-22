@@ -1,9 +1,11 @@
-name: WebOS Main Release
+name: WebOS Release
 
 on:
   push:
     branches:
-      - main
+      - release
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -34,8 +36,8 @@ jobs:
       - name: Build webOS package
         run: npm run package:webos
 
-      - name: Generate Homebrew Manifest
-        id: manifest
+      - name: Collect IPK and manifest
+        id: ipk
         shell: bash
         run: |
           set -euo pipefail
@@ -56,7 +58,7 @@ jobs:
             "title": "Litefin",
             "appDescription": "Native Jellyfin client for WebOS",
             "iconUri": "https://raw.githubusercontent.com/MoazSalem/litefin/development/icon-130.png",
-            "sourceUrl": "https://github.com/MoazSalem/litefin",
+            "sourceUrl": "https://github.com/xenking/litefin",
             "rootRequired": false,
             "ipkUrl": "$IPK_FILE",
             "ipkHash": {
@@ -66,6 +68,28 @@ jobs:
           EOF
 
           echo "ipk_file=$IPK_FILE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Determine release target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag_name=$TAG"               >> "$GITHUB_OUTPUT"
+            echo "release_name=Litefin $TAG"   >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"            >> "$GITHUB_OUTPUT"
+            echo "make_latest=true"            >> "$GITHUB_OUTPUT"
+            echo "rolling=false"               >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=release-webos"      >> "$GITHUB_OUTPUT"
+            echo "release_name=Rolling webOS build" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"             >> "$GITHUB_OUTPUT"
+            echo "make_latest=false"           >> "$GITHUB_OUTPUT"
+            echo "rolling=true"                >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Generate release body
         id: release_body
@@ -73,33 +97,43 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION="${{ steps.ipk.outputs.version }}"
           SHORT_SHA=$(git rev-parse --short HEAD)
-          FOOTER=$(cat .github/RELEASE_NOTES_FOOTER.md)
+          FOOTER=""
+          if [[ -f .github/RELEASE_NOTES_FOOTER.md ]]; then
+            FOOTER=$(cat .github/RELEASE_NOTES_FOOTER.md)
+          fi
 
           {
-            echo "content<<EOF"
-            echo "Automated webOS build from main."
+            echo "content<<NOTES_EOF"
+            if [[ "${{ steps.target.outputs.rolling }}" == "true" ]]; then
+              echo "Automated webOS build from release branch."
+            else
+              echo "Automated webOS build for tag ${{ steps.target.outputs.tag_name }}."
+            fi
             echo
             echo "- Version: ${VERSION}"
             echo "- Commit: ${SHORT_SHA}"
-            echo "- Build artifact: ${{ steps.manifest.outputs.ipk_file }}"
+            echo "- Artifact: ${{ steps.ipk.outputs.ipk_file }}"
+            echo "- SHA256: \`${{ steps.ipk.outputs.sha256 }}\`"
             echo
-            echo "$FOOTER"
-            echo "EOF"
+            if [[ -n "$FOOTER" ]]; then
+              echo "$FOOTER"
+            fi
+            echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish/Update main release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: main-webos
+          tag_name: ${{ steps.target.outputs.tag_name }}
+          name: ${{ steps.target.outputs.release_name }}
           target_commitish: ${{ github.sha }}
-          name: Main webOS build
           body: ${{ steps.release_body.outputs.content }}
-          prerelease: true
-          make_latest: false
+          prerelease: ${{ steps.target.outputs.prerelease }}
+          make_latest: ${{ steps.target.outputs.make_latest }}
           files: |
-            ${{ steps.manifest.outputs.ipk_file }}
+            ${{ steps.ipk.outputs.ipk_file }}
             manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
