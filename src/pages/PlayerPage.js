@@ -546,8 +546,32 @@ class PlayerPage extends Page {
             this.on('key:pause', () => this._onRemotePause());
             this.on('key:playPause', () => this._onRemotePlayPause());
             this.on('key:stop', () => this._onRemoteStop());
-            this.on('key:next', () => this._onRemoteNext());
-            this.on('key:previous', () => this._onRemotePrevious());
+            this.on('key:next', () => {
+                // LG channel-rocker Up (KeyCode 33). When the user opts in, jump to
+                // next chapter instead of switching episodes — matches upstream
+                // jellyfin-webos behaviour. Only remaps physical keys, not the
+                // 'remote:next' command coming from the Jellyfin remote-control API.
+                if (PlayerSettings.get('channelRockerJumpsChapters')
+                    && this._player
+                    && typeof this._player.nextChapter === 'function'
+                    && (this._player.getChapters?.().length || 0) > 0) {
+                    log.debug('Channel Up -> next chapter (user preference)');
+                    this._player.nextChapter();
+                    return;
+                }
+                this._onRemoteNext();
+            });
+            this.on('key:previous', () => {
+                if (PlayerSettings.get('channelRockerJumpsChapters')
+                    && this._player
+                    && typeof this._player.previousChapter === 'function'
+                    && (this._player.getChapters?.().length || 0) > 0) {
+                    log.debug('Channel Down -> previous chapter (user preference)');
+                    this._player.previousChapter();
+                    return;
+                }
+                this._onRemotePrevious();
+            });
 
             this.on('key:rewind', () => {
                 if (this._player) {

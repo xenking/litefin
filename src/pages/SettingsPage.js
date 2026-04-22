@@ -1212,8 +1212,34 @@ class SettingsPage extends Page {
                         <span class="setting-description" data-i18n="EnableTrickplayDescription">${i18n.t('EnableTrickplayDescription') || 'Show video frame previews when scrubbing through a video'}</span>
                     </div>
                     <div class="setting-control">
-                        <button class="toggle-switch ${PlayerSettings.get('enableTrickplay') ? 'active' : ''}" 
-                                id="toggle-trickplay" 
+                        <button class="toggle-switch ${PlayerSettings.get('enableTrickplay') ? 'active' : ''}"
+                                id="toggle-trickplay"
+                                tabindex="0">
+                        </button>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="ChannelRockerJumpsChapters">${i18n.t('ChannelRockerJumpsChapters')}</span>
+                        <span class="setting-description" data-i18n="ChannelRockerJumpsChaptersDescription">${i18n.t('ChannelRockerJumpsChaptersDescription')}</span>
+                    </div>
+                    <div class="setting-control">
+                        <button class="toggle-switch ${PlayerSettings.get('channelRockerJumpsChapters') ? 'active' : ''}"
+                                id="toggle-channel-rocker-chapters"
+                                tabindex="0">
+                        </button>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="PersistTrackSelectionInSeason">${i18n.t('PersistTrackSelectionInSeason')}</span>
+                        <span class="setting-description" data-i18n="PersistTrackSelectionInSeasonDescription">${i18n.t('PersistTrackSelectionInSeasonDescription')}</span>
+                    </div>
+                    <div class="setting-control">
+                        <button class="toggle-switch ${PlayerSettings.get('persistTrackSelectionInSeason') ? 'active' : ''}"
+                                id="toggle-persist-tracks"
                                 tabindex="0">
                         </button>
                     </div>
@@ -2741,6 +2767,26 @@ class SettingsPage extends Page {
                 const newValue = !currentValue;
                 PlayerSettings.set('enableTrickplay', newValue);
                 trickplayBtn.classList.toggle('active', newValue);
+            });
+        }
+
+        // Toggle Channel Rocker → Chapter Jump
+        const channelRockerBtn = this.$('#toggle-channel-rocker-chapters');
+        if (channelRockerBtn) {
+            channelRockerBtn.addEventListener('click', () => {
+                const newValue = !PlayerSettings.get('channelRockerJumpsChapters');
+                PlayerSettings.set('channelRockerJumpsChapters', newValue);
+                channelRockerBtn.classList.toggle('active', newValue);
+            });
+        }
+
+        // Toggle Persist Track Selection Across Episodes in Season
+        const persistTracksBtn = this.$('#toggle-persist-tracks');
+        if (persistTracksBtn) {
+            persistTracksBtn.addEventListener('click', () => {
+                const newValue = !PlayerSettings.get('persistTrackSelectionInSeason');
+                PlayerSettings.set('persistTrackSelectionInSeason', newValue);
+                persistTracksBtn.classList.toggle('active', newValue);
             });
         }
 

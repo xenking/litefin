@@ -261,6 +261,19 @@ const DEFAULTS = {
     // Auto-play next episode when current finishes
     enableNextEpisodeAutoPlay: true,
 
+    // When true, the LG remote Channel Up / Channel Down rocker (PageUp/PageDown,
+    // KeyCode 33/34) jumps to next/previous chapter during playback instead of
+    // triggering the default platform behaviour (episode switch / LiveTV channel).
+    // Matches upstream jellyfin-webos behaviour.
+    channelRockerJumpsChapters: false,
+
+    // When true, the user's selected audio + subtitle tracks in one episode are
+    // remembered for the current series+season and automatically re-applied to
+    // following episodes in the same season, as long as a matching track exists
+    // (matched by Language + Codec + Title + Channels). The preference is kept
+    // in memory for the life of the player session; it does not persist to disk.
+    persistTrackSelectionInSeason: false,
+
     // Show trickplay (sprite-sheet) thumbnail previews when scrubbing through videos.
     // Disable to skip all trickplay calculations and image fetches entirely.
     enableTrickplay: true,
