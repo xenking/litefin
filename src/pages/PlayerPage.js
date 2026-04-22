@@ -25,6 +25,7 @@ import { JellyfinPlayer } from '../player/core/JellyfinPlayer.js';
 import SubtitleStyles from '../utils/SubtitleStyles.js';
 import FontLoader from '../utils/FontLoader.js';
 import { PlayerSettings } from '../utils/PlayerSettings.js';
+import { fingerprintStream, findMatchingStream } from '../utils/TrackFingerprint.js';
 import { logger } from '../utils/Logger.js';
 import { pluginManager } from '../plugins/PluginManager.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
@@ -49,6 +50,13 @@ class PlayerPage extends Page {
 
         // OSD controller reference
         this._osd = null;
+
+        // Remembered audio/subtitle fingerprint for the current SeriesId+SeasonId.
+        // Populated when the user switches a track mid-playback; consumed at the
+        // start of the next episode to re-apply the same choice. Lives only for
+        // the lifetime of this page instance — not persisted to disk.
+        // Shape: { seriesId, seasonId, audio: Fingerprint|null, subtitle: Fingerprint|'disabled'|null }
+        this._seasonTrackPref = null;
 
         // Track reporting state
         this._hasReportedStart = false;
@@ -722,23 +730,36 @@ class PlayerPage extends Page {
             ? item.MediaSources?.find((m) => m.Id === preSelectedMediaSourceId) || item.MediaSources?.[0]
             : item.MediaSources?.[0];
 
-        // 2. Fallback to default from MediaSource
+        // 2. Season-scoped track preference overrides the server default when
+        //    the user enabled "keep audio & subtitle across episodes" AND the
+        //    previous episode in this season recorded a fingerprint that
+        //    matches a stream on the new episode. DetailsPage-provided picks
+        //    (preSelectedAudio / preSelectedSubtitle) still take precedence —
+        //    an explicit choice on the next episode wins over the remembered one.
+        const seasonPref = this._resolveSeasonTrackPref(item, mediaSource);
+
+        // 3. Fallback to default from MediaSource
         // Handle case where index might be 0 (falsey)
         const savedAudioIndex =
             preSelectedAudio !== null && preSelectedAudio !== undefined
                 ? preSelectedAudio
-                : mediaSource?.DefaultAudioStreamIndex;
+                : (seasonPref.audio !== null
+                    ? seasonPref.audio
+                    : mediaSource?.DefaultAudioStreamIndex);
 
         const savedSubtitleIndex =
             preSelectedSubtitle !== null && preSelectedSubtitle !== undefined
                 ? preSelectedSubtitle
-                : mediaSource?.DefaultSubtitleStreamIndex;
+                : (seasonPref.subtitle !== null
+                    ? seasonPref.subtitle
+                    : mediaSource?.DefaultSubtitleStreamIndex);
 
         log.info('Starting playback with resolved preferences:', {
             audio: savedAudioIndex,
             subtitle: savedSubtitleIndex,
             preSelectedAudio,
-            preSelectedSubtitle
+            preSelectedSubtitle,
+            seasonPrefApplied: seasonPref.applied
         });
 
         // Start playback using the player's internal logic
@@ -1716,6 +1737,111 @@ class PlayerPage extends Page {
         log.info('Media streams changed, reporting progress to persist selection');
         const isPaused = this._player.isPaused();
         this._reportPlaybackProgress(isPaused ? 'pause' : 'timeupdate');
+
+        // Capture current selection as season-scoped preference so it can be
+        // re-applied to the next episode. Only runs on Episodes with both
+        // SeriesId and SeasonId — other item types don't have a "season" concept.
+        this._captureSeasonTrackPref(data);
+    }
+
+    /**
+     * Record the user's current audio/subtitle selection for the current
+     * SeriesId+SeasonId so the next episode in the same season can re-apply it.
+     * No-op if the persistence setting is off or the item isn't an episode.
+     *
+     * @param {Object} data {audioStreamIndex?, subtitleStreamIndex?}
+     * @private
+     */
+    _captureSeasonTrackPref(data) {
+        if (!PlayerSettings.get('persistTrackSelectionInSeason')) return;
+        if (!this._item || this._item.Type !== 'Episode') return;
+        if (!this._item.SeriesId || !this._item.SeasonId) return;
+
+        const mediaSource = this._player?.getCurrentMediaSource?.()
+            || this._player?._currentMediaSource
+            || this._item.MediaSources?.[0];
+        const streams = mediaSource?.MediaStreams || [];
+        if (streams.length === 0) return;
+
+        // Start fresh if we switched series or season since last capture.
+        if (!this._seasonTrackPref
+            || this._seasonTrackPref.seriesId !== this._item.SeriesId
+            || this._seasonTrackPref.seasonId !== this._item.SeasonId) {
+            this._seasonTrackPref = {
+                seriesId: this._item.SeriesId,
+                seasonId: this._item.SeasonId,
+                audio: null,
+                subtitle: null
+            };
+        }
+
+        if (data && typeof data.audioStreamIndex === 'number') {
+            const s = streams.find((x) => x.Type === 'Audio' && x.Index === data.audioStreamIndex);
+            if (s) {
+                this._seasonTrackPref.audio = fingerprintStream(s);
+                log.info('Season track pref: captured audio', this._seasonTrackPref.audio);
+            }
+        }
+
+        if (data && typeof data.subtitleStreamIndex === 'number') {
+            if (data.subtitleStreamIndex < 0) {
+                this._seasonTrackPref.subtitle = 'disabled';
+                log.info('Season track pref: captured subtitle=disabled');
+            } else {
+                const s = streams.find((x) => x.Type === 'Subtitle' && x.Index === data.subtitleStreamIndex);
+                if (s) {
+                    this._seasonTrackPref.subtitle = fingerprintStream(s);
+                    log.info('Season track pref: captured subtitle', this._seasonTrackPref.subtitle);
+                }
+            }
+        }
+    }
+
+    /**
+     * If we have a captured season track preference and the next item is in
+     * the same series+season, resolve the remembered fingerprint against the
+     * current media source's streams and return {audio, subtitle} indices.
+     * Returns null for either field if no match is found (or setting is off).
+     *
+     * @param {Object} item         The item about to start playing.
+     * @param {Object} mediaSource  Resolved MediaSource for that item.
+     * @returns {{audio: number|null, subtitle: number|null, applied: boolean}}
+     * @private
+     */
+    _resolveSeasonTrackPref(item, mediaSource) {
+        const out = { audio: null, subtitle: null, applied: false };
+        if (!PlayerSettings.get('persistTrackSelectionInSeason')) return out;
+        if (!this._seasonTrackPref) return out;
+        if (!item || item.Type !== 'Episode') return out;
+        if (item.SeriesId !== this._seasonTrackPref.seriesId) return out;
+        if (item.SeasonId !== this._seasonTrackPref.seasonId) return out;
+
+        const streams = mediaSource?.MediaStreams || [];
+        if (streams.length === 0) return out;
+
+        if (this._seasonTrackPref.audio) {
+            const match = findMatchingStream(streams, 'Audio', this._seasonTrackPref.audio);
+            if (match) {
+                out.audio = match.Index;
+                out.applied = true;
+                log.info(`Season track pref: matched audio → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+            }
+        }
+
+        if (this._seasonTrackPref.subtitle === 'disabled') {
+            out.subtitle = -1;
+            out.applied = true;
+            log.info('Season track pref: subtitles disabled');
+        } else if (this._seasonTrackPref.subtitle) {
+            const match = findMatchingStream(streams, 'Subtitle', this._seasonTrackPref.subtitle);
+            if (match) {
+                out.subtitle = match.Index;
+                out.applied = true;
+                log.info(`Season track pref: matched subtitle → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+            }
+        }
+
+        return out;
     }
 
     /**
