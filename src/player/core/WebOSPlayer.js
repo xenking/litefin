@@ -484,16 +484,27 @@ export class WebOSPlayer {
     _applyInitialTracks(options, hls) {
         // ---- Audio track ----
         if (options.audioStreamIndex !== undefined && options.audioStreamIndex !== null) {
+            const playMethod = options.playMethod;
+            const isServerSelectedHlsAudio = options.isHls && (
+                playMethod === 'Transcode' ||
+                playMethod === 'DirectStream'
+            );
+
             // Convert Jellyfin stream index (e.g. 1) to 0-based audio-only list index (e.g. 0)
             // so it maps correctly onto hls.audioTracks / video.audioTracks arrays.
             const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
             const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
             const resolvedIndex = listIndex >= 0 ? listIndex : 0;
 
+            // For Jellyfin-generated HLS transcode/direct-stream sessions the requested
+            // AudioStreamIndex is already baked into the manifest/segments by the server.
+            // The browser/WebOS audioTracks list is therefore the HLS rendition list, not
+            // the original Jellyfin MediaStreams array. Mapping stream Index=2 to list
+            // index 1 can disable the only HLS audio track and produce silent playback.
             if (hls) {
-                // Single-track = Transcode/DirectStream (server picked one); multi-track = Remux/DirectPlay.
-                const outputIndex = hls.audioTracks.length <= 1 ? 0 : resolvedIndex;
-                if (outputIndex < hls.audioTracks.length) {
+                const tracks = hls.audioTracks || [];
+                const outputIndex = (isServerSelectedHlsAudio || tracks.length <= 1) ? 0 : resolvedIndex;
+                if (outputIndex < tracks.length) {
                     hls.audioTrack = outputIndex;
                     log.debug('WebOSPlayer: Hls.js audio track set to', outputIndex);
                 }
@@ -804,12 +815,19 @@ export class WebOSPlayer {
         // ---- Hls.js path ----
         if (this._hlsPlayer) {
             const tracks = this._hlsPlayer.audioTracks;
-            if (tracks && listIndex >= 0 && listIndex < tracks.length) {
-                log.info('WebOSPlayer: Hls.js audio track →', listIndex, tracks[listIndex]?.name);
-                this._hlsPlayer.audioTrack = listIndex;
-            } else {
-                log.warn('WebOSPlayer: Hls.js audio index', listIndex, 'out of range (', tracks?.length, ')');
+            if (!tracks || tracks.length === 0) {
+                log.debug('WebOSPlayer: Hls.js audioTracks not available');
+                return;
             }
+
+            let targetIndex = listIndex;
+            if (targetIndex < 0 || targetIndex >= tracks.length) {
+                log.warn('WebOSPlayer: Hls.js audio index', listIndex, 'out of range (', tracks.length, '); falling back to 0');
+                targetIndex = 0;
+            }
+
+            log.info('WebOSPlayer: Hls.js audio track →', targetIndex, tracks[targetIndex]?.name);
+            this._hlsPlayer.audioTrack = targetIndex;
             return;
         }
 
@@ -823,10 +841,16 @@ export class WebOSPlayer {
             return;
         }
 
-        for (let i = 0; i < audioTracks.length; i++) {
-            audioTracks[i].enabled = (i === listIndex);
+        let targetIndex = listIndex;
+        if (targetIndex < 0 || targetIndex >= audioTracks.length) {
+            log.warn('WebOSPlayer: Native audio index', listIndex, 'out of range (', audioTracks.length, '); falling back to 0');
+            targetIndex = 0;
         }
-        log.info('WebOSPlayer: Native audio track → list index', listIndex);
+
+        for (let i = 0; i < audioTracks.length; i++) {
+            audioTracks[i].enabled = (i === targetIndex);
+        }
+        log.info('WebOSPlayer: Native audio track → list index', targetIndex);
 
         // WebOS native media pipeline does not apply audioTracks.enabled changes
         // mid-playback without a seek. A sub-frame back-seek (≤0.1 s) forces the
