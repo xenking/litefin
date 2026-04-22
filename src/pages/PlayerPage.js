@@ -26,6 +26,7 @@ import SubtitleStyles from '../utils/SubtitleStyles.js';
 import FontLoader from '../utils/FontLoader.js';
 import { PlayerSettings } from '../utils/PlayerSettings.js';
 import { fingerprintStream, findMatchingStream } from '../utils/TrackFingerprint.js';
+import { loadSeasonPref, saveSeasonPref } from '../utils/SeasonTrackPrefStore.js';
 import { logger } from '../utils/Logger.js';
 import { pluginManager } from '../plugins/PluginManager.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
@@ -1775,25 +1776,42 @@ class PlayerPage extends Page {
             };
         }
 
+        let audioDelta; // undefined = not touched, so saveSeasonPref merges
+        let subtitleDelta;
+
         if (data && typeof data.audioStreamIndex === 'number') {
             const s = streams.find((x) => x.Type === 'Audio' && x.Index === data.audioStreamIndex);
             if (s) {
-                this._seasonTrackPref.audio = fingerprintStream(s);
-                log.info('Season track pref: captured audio', this._seasonTrackPref.audio);
+                audioDelta = fingerprintStream(s);
+                this._seasonTrackPref.audio = audioDelta;
+                log.info('Season track pref: captured audio', audioDelta);
             }
         }
 
         if (data && typeof data.subtitleStreamIndex === 'number') {
             if (data.subtitleStreamIndex < 0) {
+                subtitleDelta = 'disabled';
                 this._seasonTrackPref.subtitle = 'disabled';
                 log.info('Season track pref: captured subtitle=disabled');
             } else {
                 const s = streams.find((x) => x.Type === 'Subtitle' && x.Index === data.subtitleStreamIndex);
                 if (s) {
-                    this._seasonTrackPref.subtitle = fingerprintStream(s);
-                    log.info('Season track pref: captured subtitle', this._seasonTrackPref.subtitle);
+                    subtitleDelta = fingerprintStream(s);
+                    this._seasonTrackPref.subtitle = subtitleDelta;
+                    log.info('Season track pref: captured subtitle', subtitleDelta);
                 }
             }
+        }
+
+        // Write-through to localStorage so the choice survives app exit.
+        // Keyed by serverUrl+userId+seasonId; LRU-capped at 50 seasons.
+        if (audioDelta !== undefined || subtitleDelta !== undefined) {
+            saveSeasonPref(
+                api.serverUrl,
+                api.userId,
+                this._item.SeasonId,
+                { audio: audioDelta, subtitle: subtitleDelta }
+            );
         }
     }
 
@@ -1811,16 +1829,41 @@ class PlayerPage extends Page {
     _resolveSeasonTrackPref(item, mediaSource) {
         const out = { audio: null, subtitle: null, applied: false };
         if (!PlayerSettings.get('persistTrackSelectionInSeason')) return out;
-        if (!this._seasonTrackPref) return out;
         if (!item || item.Type !== 'Episode') return out;
-        if (item.SeriesId !== this._seasonTrackPref.seriesId) return out;
-        if (item.SeasonId !== this._seasonTrackPref.seasonId) return out;
+        if (!item.SeriesId || !item.SeasonId) return out;
+
+        // Prefer the hot in-memory snapshot when it matches the current season.
+        // Cold starts (fresh app launch, resumed series) fall through to disk.
+        let pref = null;
+        if (this._seasonTrackPref
+            && this._seasonTrackPref.seriesId === item.SeriesId
+            && this._seasonTrackPref.seasonId === item.SeasonId) {
+            pref = {
+                audio: this._seasonTrackPref.audio,
+                subtitle: this._seasonTrackPref.subtitle
+            };
+        } else {
+            const persisted = loadSeasonPref(api.serverUrl, api.userId, item.SeasonId);
+            if (persisted) {
+                pref = { audio: persisted.audio, subtitle: persisted.subtitle };
+                // Hydrate in-memory cache so the capture handler can merge onto it.
+                this._seasonTrackPref = {
+                    seriesId: item.SeriesId,
+                    seasonId: item.SeasonId,
+                    audio: persisted.audio || null,
+                    subtitle: persisted.subtitle || null
+                };
+                log.info('Season track pref: hydrated from storage');
+            }
+        }
+
+        if (!pref) return out;
 
         const streams = mediaSource?.MediaStreams || [];
         if (streams.length === 0) return out;
 
-        if (this._seasonTrackPref.audio) {
-            const match = findMatchingStream(streams, 'Audio', this._seasonTrackPref.audio);
+        if (pref.audio) {
+            const match = findMatchingStream(streams, 'Audio', pref.audio);
             if (match) {
                 out.audio = match.Index;
                 out.applied = true;
@@ -1828,12 +1871,12 @@ class PlayerPage extends Page {
             }
         }
 
-        if (this._seasonTrackPref.subtitle === 'disabled') {
+        if (pref.subtitle === 'disabled') {
             out.subtitle = -1;
             out.applied = true;
             log.info('Season track pref: subtitles disabled');
-        } else if (this._seasonTrackPref.subtitle) {
-            const match = findMatchingStream(streams, 'Subtitle', this._seasonTrackPref.subtitle);
+        } else if (pref.subtitle) {
+            const match = findMatchingStream(streams, 'Subtitle', pref.subtitle);
             if (match) {
                 out.subtitle = match.Index;
                 out.applied = true;

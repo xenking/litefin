@@ -270,8 +270,10 @@ const DEFAULTS = {
     // When true, the user's selected audio + subtitle tracks in one episode are
     // remembered for the current series+season and automatically re-applied to
     // following episodes in the same season, as long as a matching track exists
-    // (matched by Language + Codec + Title + Channels). The preference is kept
-    // in memory for the life of the player session; it does not persist to disk.
+    // (matched by Language + Codec + Title + Channels).
+    // Persistence: scoped by (serverUrl, userId, seasonId) in localStorage with
+    // an LRU cap of 50 seasons — oldest entries fall off silently. See
+    // utils/SeasonTrackPrefStore.js.
     persistTrackSelectionInSeason: false,
 
     // Show trickplay (sprite-sheet) thumbnail previews when scrubbing through videos.
