@@ -243,6 +243,7 @@ export const MediaHelper = {
             'VideoBitDepthNotSupported',
             'VideoFramerateNotSupported',
             'VideoBitrateNotSupported',
+            'VideoRangeTypeNotSupported',
             'RefFramesNotSupported',
             'AnamorphicVideoNotSupported',
             'InterlacedVideoNotSupported',

@@ -460,20 +460,45 @@ export class WebOSPlayer {
     _applyInitialTracks(options, hls) {
         // ---- Audio track ----
         if (options.audioStreamIndex !== undefined && options.audioStreamIndex !== null) {
-            // Convert Jellyfin stream index (e.g. 1) to 0-based audio-only list index (e.g. 0)
-            // so it maps correctly onto hls.audioTracks / video.audioTracks arrays.
-            const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
-            const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
-            const resolvedIndex = listIndex >= 0 ? listIndex : 0;
+            const playMethod = options.playMethod;
+            const isServerSelectedHlsAudio = options.isHls && (
+                playMethod === 'Transcode' ||
+                playMethod === 'DirectStream' ||
+                playMethod === 'Remux'
+            );
 
-            if (hls) {
-                if (resolvedIndex < hls.audioTracks.length) {
-                    hls.audioTrack = resolvedIndex;
-                    log.debug('WebOSPlayer: Hls.js audio track set to', resolvedIndex);
+            // For Jellyfin-generated HLS transcode/direct-stream sessions the requested
+            // AudioStreamIndex is already baked into the manifest/segments by the server.
+            // The browser/WebOS audioTracks list is therefore the HLS rendition list, not
+            // the original Jellyfin MediaStreams array. Mapping stream Index=2 to list
+            // index 1 can disable the only HLS audio track and produce silent playback.
+            if (isServerSelectedHlsAudio) {
+                if (hls) {
+                    const tracks = hls.audioTracks || [];
+                    if (tracks.length > 0) {
+                        hls.audioTrack = 0;
+                        log.info('WebOSPlayer: HLS audio is server-selected; keeping manifest audio track 0');
+                    }
+                } else {
+                    this.setAudioStreamIndex(0);
                 }
             } else {
-                // Native: toggle HTML5 AudioTrack objects
-                this.setAudioStreamIndex(resolvedIndex);
+                // DirectPlay: convert Jellyfin stream index (e.g. 1) to 0-based
+                // audio-only list index (e.g. 0) so it maps onto hls.audioTracks /
+                // video.audioTracks arrays.
+                const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
+                const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
+                const resolvedIndex = listIndex >= 0 ? listIndex : 0;
+
+                if (hls) {
+                    if (resolvedIndex < hls.audioTracks.length) {
+                        hls.audioTrack = resolvedIndex;
+                        log.debug('WebOSPlayer: Hls.js audio track set to', resolvedIndex);
+                    }
+                } else {
+                    // Native: toggle HTML5 AudioTrack objects
+                    this.setAudioStreamIndex(resolvedIndex);
+                }
             }
         }
 
@@ -748,12 +773,19 @@ export class WebOSPlayer {
         // ---- Hls.js path ----
         if (this._hlsPlayer) {
             const tracks = this._hlsPlayer.audioTracks;
-            if (tracks && listIndex >= 0 && listIndex < tracks.length) {
-                log.info('WebOSPlayer: Hls.js audio track →', listIndex, tracks[listIndex]?.name);
-                this._hlsPlayer.audioTrack = listIndex;
-            } else {
-                log.warn('WebOSPlayer: Hls.js audio index', listIndex, 'out of range (', tracks?.length, ')');
+            if (!tracks || tracks.length === 0) {
+                log.debug('WebOSPlayer: Hls.js audioTracks not available');
+                return;
             }
+
+            let targetIndex = listIndex;
+            if (targetIndex < 0 || targetIndex >= tracks.length) {
+                log.warn('WebOSPlayer: Hls.js audio index', listIndex, 'out of range (', tracks.length, '); falling back to 0');
+                targetIndex = 0;
+            }
+
+            log.info('WebOSPlayer: Hls.js audio track →', targetIndex, tracks[targetIndex]?.name);
+            this._hlsPlayer.audioTrack = targetIndex;
             return;
         }
 
@@ -767,10 +799,16 @@ export class WebOSPlayer {
             return;
         }
 
-        for (let i = 0; i < audioTracks.length; i++) {
-            audioTracks[i].enabled = (i === listIndex);
+        let targetIndex = listIndex;
+        if (targetIndex < 0 || targetIndex >= audioTracks.length) {
+            log.warn('WebOSPlayer: Native audio index', listIndex, 'out of range (', audioTracks.length, '); falling back to 0');
+            targetIndex = 0;
         }
-        log.info('WebOSPlayer: Native audio track → list index', listIndex);
+
+        for (let i = 0; i < audioTracks.length; i++) {
+            audioTracks[i].enabled = (i === targetIndex);
+        }
+        log.info('WebOSPlayer: Native audio track → list index', targetIndex);
     }
 
     /**

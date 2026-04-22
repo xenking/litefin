@@ -1,9 +1,10 @@
-name: Release
+name: WebOS Main Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build-and-release:
@@ -29,16 +30,19 @@ jobs:
       - name: Create empty sign directory
         run: mkdir -p .sign
 
-      - name: Build all packages
-        run: npm run package
+      - name: Build webOS package
+        run: npm run package:webos
 
       - name: Generate Homebrew Manifest
         id: manifest
+        shell: bash
         run: |
+          set -euo pipefail
+
           VERSION=$(node -p "require('./package.json').version")
-          IPK_FILE="Litefin-${VERSION}-legacy-webos.ipk"
+          IPK_FILE=$(ls -1 *.ipk | head -n 1)
           SHA256=$(sha256sum "$IPK_FILE" | cut -d ' ' -f 1)
-          
+
           cat <<EOF > manifest.json
           {
             "id": "org.litefin.app",
@@ -56,49 +60,40 @@ jobs:
           }
           EOF
 
-      - name: Generate Release Body
-        id: release_body
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          
-          FEATURES=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -E '^feat' || true)
-          BUGS=$(git log ${PREV_TAG}..HEAD --pretty=format:"%s" | grep -E '^fix' || true)
-          
-          CHANGELOG="# Changes\n"
-          
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG="${CHANGELOG}## New Features:\n"
-            while IFS= read -r line; do
-              clean_line=$(echo "$line" | sed -E 's/^feat\(([^)]+)\): /- /' | sed -E 's/^feat: /- /')
-              CHANGELOG="${CHANGELOG}${clean_line}\n"
-            done <<< "$FEATURES"
-            CHANGELOG="${CHANGELOG}\n"
-          fi
-          
-          if [ -n "$BUGS" ]; then
-            CHANGELOG="${CHANGELOG}## Bug fixes:\n"
-            while IFS= read -r line; do
-               clean_line=$(echo "$line" | sed -E 's/^fix\(([^)]+)\): /- \1: /' | sed -E 's/^fix: /- /')
-               CHANGELOG="${CHANGELOG}${clean_line}\n"
-            done <<< "$BUGS"
-            CHANGELOG="${CHANGELOG}\n"
-          fi
-          
-          FOOTER=$(cat .github/RELEASE_NOTES_FOOTER.md)
-          
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "$FOOTER" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "ipk_file=$IPK_FILE" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Generate release body
+        id: release_body
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          FOOTER=$(cat .github/RELEASE_NOTES_FOOTER.md)
+
+          {
+            echo "content<<EOF"
+            echo "Automated webOS build from main."
+            echo
+            echo "- Version: ${VERSION}"
+            echo "- Commit: ${SHORT_SHA}"
+            echo "- Build artifact: ${{ steps.manifest.outputs.ipk_file }}"
+            echo
+            echo "$FOOTER"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish/Update main release
         uses: softprops/action-gh-release@v2
         with:
-          body: |
-            ${{ steps.release_body.outputs.content }}
-          generate_release_notes: true
+          tag_name: main-webos
+          target_commitish: ${{ github.sha }}
+          name: Main webOS build
+          body: ${{ steps.release_body.outputs.content }}
+          prerelease: true
+          make_latest: false
           files: |
-            *.wgt
             *.ipk
             manifest.json
         env:
