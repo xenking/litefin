@@ -33,6 +33,14 @@ jobs:
       - name: Create empty sign directory
         run: mkdir -p .sign
 
+      - name: Build legacy bundle for smoke test
+        run: npx webpack --config webpack.config.cjs --config-name legacy
+
+      - name: Smoke-test bundle (catch module-level TypeErrors)
+        run: |
+          npm install --no-save --prefer-offline --no-audit --no-fund jsdom@25
+          node scripts/smoke-test.mjs
+
       - name: Build webOS package
         run: npm run package:webos
 

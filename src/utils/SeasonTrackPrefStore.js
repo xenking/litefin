@@ -17,7 +17,7 @@
 import { storage } from './StorageService.js';
 import { logger } from './Logger.js';
 
-const log = logger.child('SeasonTrackPref');
+const log = logger.create('SeasonTrackPref');
 
 const KEY_PREFIX = 'player:trackPref:v1|';
 const INDEX_KEY = 'player:trackPref:index';
