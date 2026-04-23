@@ -16,6 +16,7 @@
         "format": "prettier --write src/",
         "format:check": "prettier --check src/",
         "clean": "rimraf dist/ *.wgt *.ipk",
+        "smoke": "npx webpack --config webpack.config.cjs --config-name legacy && node scripts/smoke-test.mjs",
         "package": "gulp buildPackage",
         "package:webos": "gulp buildPackageWebos",
         "package:webos-es6": "gulp buildPackageWebosES6",
