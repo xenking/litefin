@@ -474,8 +474,8 @@ export default class SubtitleManager {
             const lineHeight = PlayerSettings.get('subtitleLineHeight');
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
-            
-            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset);
+            const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
         }
     }
 
@@ -704,14 +704,14 @@ export default class SubtitleManager {
             // Attempt to load container fonts, giving FontLoader the ASS fontname
             // set so it can normalize-match filenames to exact ASS Fontnames.
             const loadedContainerFonts = await FontLoader.loadContainerFonts(
-                this._mediaAttachments, 
-                this._serverUrl, 
-                this._itemId, 
-                this._mediaSourceId, 
+                this._mediaAttachments,
+                this._serverUrl,
+                this._itemId,
+                this._mediaSourceId,
                 this._authToken,
                 assFontnames
             );
-            
+
             log.info(`[ASSRenderer Setup] FontLoader returned ${loadedContainerFonts.length} fonts:`, loadedContainerFonts);
 
             this._hasContainerFonts = loadedContainerFonts.length > 0;
@@ -742,9 +742,9 @@ export default class SubtitleManager {
             const lineHeight = PlayerSettings.get('subtitleLineHeight');
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
-            
+            const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
             // Set styles, which might be null (allowing container fonts to work naturally)
-            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset);
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
 
             this._assRenderer.show();
 

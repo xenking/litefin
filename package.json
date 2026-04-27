@@ -36,7 +36,8 @@
         "local:sync": "npm run locale:sync",
         "local:status": "npm run locale:status",
         "local:update": "npm run locale:update",
-        "postinstall": "patch-package"
+        "postinstall": "patch-package",
+        "test:subtitles": "node scripts/subtitle-regression-test.mjs"
     },
     "keywords": [
         "jellyfin",

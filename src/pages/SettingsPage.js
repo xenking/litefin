@@ -2416,10 +2416,7 @@ class SettingsPage extends Page {
                         ${this._renderDropdown(
                             'subtitle-font-ass-select',
                             [
-                                {
-                                    value: '',
-                                    label: i18n.t(platformInfo.isWebOS ? 'DefaultWebOSSans' : 'DefaultTizenSans')
-                                },
+                                { value: '', label: i18n.t('AssFileDefault') },
                                 { value: 'poppins', label: i18n.t('ModernPoppins') },
                                 { value: 'noto-arabic', label: i18n.t('ArabicNotoSans') },
                                 { value: 'typewriter', label: i18n.t('Typewriter') },
@@ -2454,6 +2451,20 @@ class SettingsPage extends Page {
                 </div>
 
                 <div class="setting-item">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="AssDialoguePositionOverride">${i18n.t('AssDialoguePositionOverride')}</span>
+                        <span class="setting-description" data-i18n="AssDialoguePositionOverrideDescription">${i18n.t('AssDialoguePositionOverrideDescription')}</span>
+                    </div>
+                    <div class="setting-control">
+                        <button class="toggle-switch ${PlayerSettings.get('subtitleAssDialoguePositionOverride') === true ? 'active' : ''}"
+                                id="subtitle-ass-dialogue-position-toggle"
+                                data-setting="subtitleAssDialoguePositionOverride"
+                                tabindex="0">
+                        </button>
+                    </div>
+                </div>
+
+                <div class="setting-item" id="subtitle-bottom-offset-container" style="display: ${PlayerSettings.get('subtitleAssDialoguePositionOverride') === true ? '' : 'none'}">
                     <div class="setting-label">
                         <span class="setting-name" data-i18n="VerticalPositionAss">${i18n.t('VerticalPositionAss')}</span>
                         <span class="setting-description" data-i18n="VerticalPositionAssDescription">${i18n.t('VerticalPositionAssDescription')}</span>
@@ -3282,6 +3293,21 @@ class SettingsPage extends Page {
             });
         }
 
+        // Toggle ASS main-dialogue position override
+        const assDialoguePositionBtn = this.$('#subtitle-ass-dialogue-position-toggle');
+        if (assDialoguePositionBtn) {
+            assDialoguePositionBtn.addEventListener('click', () => {
+                const newValue = PlayerSettings.get('subtitleAssDialoguePositionOverride') !== true;
+                PlayerSettings.set('subtitleAssDialoguePositionOverride', newValue);
+                assDialoguePositionBtn.classList.toggle('active', newValue);
+
+                const bottomOffsetContainer = this.$('#subtitle-bottom-offset-container');
+                if (bottomOffsetContainer) bottomOffsetContainer.style.display = newValue ? '' : 'none';
+
+                focusManager.invalidateCache();
+            });
+        }
+
         // Regenerate Library Thumbnails
         // Uses storage.clearByPrefix() so the in-memory StorageService cache
         // is kept in sync with the disk — previously this called localStorage
@@ -3977,6 +4003,7 @@ class SettingsPage extends Page {
             'subtitle-line-height': { key: 'subtitleLineHeight', type: 'player' },
             'subtitle-letter-spacing': { key: 'subtitleLetterSpacing', type: 'player' },
             'subtitle-bottom-offset': { key: 'subtitleBottomOffset', type: 'player' },
+            'subtitle-ass-dialogue-position-toggle': { key: 'subtitleAssDialoguePositionOverride', type: 'player' },
             'subtitle-force-text-toggle': { key: 'disableAssStyling', type: 'player' },
             'debug-width-select': { key: 'debug_width', type: 'debug' },
             'debug-height-select': { key: 'debug_height', type: 'debug' },
@@ -4488,6 +4515,12 @@ class SettingsPage extends Page {
         const shadowThicknessContainer = document.getElementById('subtitle-shadow-thickness-container');
         if (shadowThicknessContainer) {
             shadowThicknessContainer.style.display = assOverride ? '' : 'none';
+        }
+
+        const assDialoguePosition = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
+        const bottomOffsetContainer = document.getElementById('subtitle-bottom-offset-container');
+        if (bottomOffsetContainer) {
+            bottomOffsetContainer.style.display = assDialoguePosition ? '' : 'none';
         }
 
         // Debug Toggles

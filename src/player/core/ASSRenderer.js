@@ -19,6 +19,7 @@
 import libjass from 'libjass';
 import 'libjass/libjass.css';
 import { logger } from '../../utils/Logger.js';
+import { preProcessAssContent } from './AssStylePreprocessor.js';
 
 const log = logger.create('ASSRenderer');
 
@@ -58,6 +59,8 @@ export default class ASSRenderer {
         this._rawContent = null;
         // Last known playback time for nudging on style change
         this._lastTime = null;
+        this._positionOptions = {};
+        this._styleStateKey = null;
 
         /*
          * Seek debounce: when the user jumps a chapter or scrubs rapidly,
@@ -195,7 +198,10 @@ export default class ASSRenderer {
                 this._fontFamily,
                 this._fontScale || 1.0,
                 this._outlineThickness ?? null,
-                this._shadowThickness ?? null
+                this._shadowThickness ?? null,
+                this._dialoguePositionOverride || false,
+                this._bottomOffset || 0,
+                this._positionOptions || {}
             );
             
             this._ass = await libjass.ASS.fromString(processedContent);
@@ -207,20 +213,8 @@ export default class ASSRenderer {
 
             log.info('ASS renderer created successfully');
         } catch (err) {
-            let errorMsg;
-            if (err instanceof Error) {
-                errorMsg = `${err.name}: ${err.message}\n${err.stack}`;
-            } else if (typeof err === 'object') {
-                errorMsg = JSON.stringify(err);
-            } else {
-                errorMsg = String(err);
-            }
-            
-            // Provide a preview of the content that failed to parse
-            const preview = content ? content.substring(0, 300).replace(/\r?\n/g, '\\n') : 'null/empty';
-            log.error(`Failed to create ASS renderer. Error: ${errorMsg}`);
-            log.error(`Content preview: ${preview}`);
-            
+            const errorMsg = err ? (err.name + ': ' + err.message + '\n' + err.stack) : err;
+            log.error('Failed to create ASS renderer:', errorMsg);
             this.destroy();
             throw err;
         }
@@ -260,124 +254,38 @@ export default class ASSRenderer {
         // Spacing overrides
         const hasLineHeight = this._lineHeight !== undefined && this._lineHeight !== 0;
         const hasLetterSpacing = this._letterSpacing !== undefined && this._letterSpacing !== 0;
-        const hasBottomOffset = this._bottomOffset !== undefined && this._bottomOffset !== 0;
 
-        if (hasLineHeight) classNames.push('override-line-height');
-        if (hasBottomOffset) classNames.push('override-bottom-offset');
-        if (hasLetterSpacing) classNames.push('override-letter-spacing');
-
-        const isUltraLegacy = document.documentElement.getAttribute('data-layout-tier') === 'ultra-legacy';
-
-        if (isUltraLegacy) {
-            // Chrome 38 does not support CSS variables, so dynamic inline vars fail.
-            // We must inject a dedicated style block to enforce these offsets.
-            let styleEl = document.getElementById('ass-ul-styles');
-            if (!styleEl) {
-                styleEl = document.createElement('style');
-                styleEl.id = 'ass-ul-styles';
-                document.head.appendChild(styleEl);
-            }
-            
-            let cssText = '';
-            if (hasLineHeight) {
-                cssText += `html[data-layout-tier="ultra-legacy"] .libjass-subs div[data-dialogue-id] > span { margin-bottom: ${this._lineHeight}px !important; }\n`;
-            }
-            if (hasBottomOffset) {
-                cssText += `html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .libjass-subs .an1,
-html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .libjass-subs .an2,
-html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .libjass-subs .an3 { bottom: ${this._bottomOffset}px !important; }\n`;
-            }
-            if (hasLetterSpacing) {
-                cssText += `html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-letter-spacing span { letter-spacing: ${this._letterSpacing}px !important; }\n`;
-            }
-            styleEl.innerHTML = cssText;
-            
+        if (hasLineHeight) {
+            this._wrapper.style.setProperty('--ass-vertical-spacing', this._lineHeight + 'px');
+            classNames.push('override-line-height');
         } else {
-            // Modern WebKit: use standard CSS variables
-            if (hasLineHeight) {
-                this._wrapper.style.setProperty('--ass-vertical-spacing', this._lineHeight + 'px');
-            } else {
-                this._wrapper.style.removeProperty('--ass-vertical-spacing');
-            }
-
-            if (hasBottomOffset) {
-                this._wrapper.style.setProperty('--ass-bottom-offset', this._bottomOffset + 'px');
-            } else {
-                this._wrapper.style.removeProperty('--ass-bottom-offset');
-            }
-
-            if (hasLetterSpacing) {
-                this._wrapper.style.setProperty('--ass-letter-spacing', this._letterSpacing + 'px');
-            } else {
-                this._wrapper.style.removeProperty('--ass-letter-spacing');
-            }
-            
-        }
-        
-        // ====================================================================
-        // Apply ASS Subtitle Scaling via CSS Transform to Individual Divs
-        // --------------------------------------------------------------------
-        // We MUST scale the individual subtitle `div`s using their specific
-        // alignment anchor points (transform-origin).
-        // Scaling the whole container pushes top/bottom subtitles off-screen.
-        // Natively modifying ASS `Fontsize` breaks Karaoke syllable absolute math.
-        // ====================================================================
-        let scaleStyleEl = document.getElementById('ass-scale-styles');
-        if (!scaleStyleEl) {
-            scaleStyleEl = document.createElement('style');
-            scaleStyleEl.id = 'ass-scale-styles';
-            document.head.appendChild(scaleStyleEl);
+            this._wrapper.style.removeProperty('--ass-vertical-spacing');
         }
 
-        if (this._fontScale && this._fontScale !== 1.0) {
-            const scale = this._fontScale;
-            // Target all libjass subtitle divs. Use .anX classes to determine the exact anchor point
-            // so they scale outward from their intended baseline, never clipping off-screen.
-            scaleStyleEl.innerHTML = `
-                /* Specific overrides to scale standard dialogue while preventing edge-aligned subtitles from clipping off-screen */
-                .libjass-wrapper .libjass-subs .an1,
-                .libjass-wrapper .libjass-subs .an2,
-                .libjass-wrapper .libjass-subs .an3,
-                .libjass-wrapper .libjass-subs .an4,
-                .libjass-wrapper .libjass-subs .an5,
-                .libjass-wrapper .libjass-subs .an6,
-                .libjass-wrapper .libjass-subs .an7,
-                .libjass-wrapper .libjass-subs .an8,
-                .libjass-wrapper .libjass-subs .an9 {
-                    transform: scale(${scale}) !important;
-                    -webkit-transform: scale(${scale}) !important;
-                }
-                .libjass-wrapper .libjass-subs .an1 { transform-origin: left bottom !important; -webkit-transform-origin: left bottom !important; }
-                .libjass-wrapper .libjass-subs .an2 { transform-origin: center bottom !important; -webkit-transform-origin: center bottom !important; }
-                .libjass-wrapper .libjass-subs .an3 { transform-origin: right bottom !important; -webkit-transform-origin: right bottom !important; }
-                .libjass-wrapper .libjass-subs .an4 { transform-origin: left center !important; -webkit-transform-origin: left center !important; }
-                .libjass-wrapper .libjass-subs .an5 { transform-origin: center center !important; -webkit-transform-origin: center center !important; }
-                .libjass-wrapper .libjass-subs .an6 { transform-origin: right center !important; -webkit-transform-origin: right center !important; }
-                .libjass-wrapper .libjass-subs .an7 { transform-origin: left top !important; -webkit-transform-origin: left top !important; }
-                .libjass-wrapper .libjass-subs .an8 { transform-origin: center top !important; -webkit-transform-origin: center top !important; }
-                .libjass-wrapper .libjass-subs .an9 { transform-origin: right top !important; -webkit-transform-origin: right top !important; }
-            `;
-            // Cleanup wrapper transform just in case
-            this._wrapper.style.transform = '';
-            this._wrapper.style.transformOrigin = '';
-            this._wrapper.style.webkitTransform = '';
-            this._wrapper.style.webkitTransformOrigin = '';
+        if (hasLetterSpacing) {
+            this._wrapper.style.setProperty('--ass-letter-spacing', this._letterSpacing + 'px');
+            classNames.push('override-letter-spacing');
         } else {
-            scaleStyleEl.innerHTML = '';
+            this._wrapper.style.removeProperty('--ass-letter-spacing');
         }
 
         this._wrapper.className = classNames.join(' ');
         log.debug(`Wrapper updated: className="${this._wrapper.className}", lineH=${this._lineHeight}, bottom=${this._bottomOffset}, letterS=${this._letterSpacing}`);
     }
 
-    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0) {
-        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}`);
-        
-        const styleRequiresReparse = 
-            this._fontFamily !== fontFamily ||
-            this._fontScale !== fontScale ||
-            this._outlineThickness !== outlineThickness ||
-            this._shadowThickness !== shadowThickness;
+    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0, dialoguePositionOverride = false, positionOptions = {}) {
+        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}, position=${JSON.stringify(positionOptions)}`);
+        const nextStyleStateKey = JSON.stringify({
+            className,
+            fontFamily,
+            fontScale,
+            outlineThickness,
+            shadowThickness,
+            bottomOffset,
+            dialoguePositionOverride,
+            positionOptions
+        });
+        const shouldReparse = this._rawContent && nextStyleStateKey !== this._styleStateKey;
 
         this._fontClass = className;
         this._fontFamily = fontFamily;
@@ -387,16 +295,19 @@ html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .l
         this._lineHeight = lineHeight;
         this._letterSpacing = letterSpacing;
         this._bottomOffset = bottomOffset;
+        this._dialoguePositionOverride = dialoguePositionOverride;
+        this._positionOptions = positionOptions || {};
+        this._styleStateKey = nextStyleStateKey;
 
         this._updateWrapperStyles();
 
-        if (this._rawContent && styleRequiresReparse) {
-            log.info(`Re-parsing ASS with new styles: family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}`);
+        if (shouldReparse) {
+            log.info(`Re-parsing ASS with updated style settings (Font: ${fontFamily || 'file default'}, Scale: ${fontScale}, Out: ${outlineThickness}, Shad: ${shadowThickness}, DialoguePos: ${dialoguePositionOverride})`);
             
             // Re-preprocess and re-parse the entire string.
             // This is the most "Nuclear" and definitive way to ensure the new font
             // and border styles are applied throughout the entire track.
-            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness);
+            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness, dialoguePositionOverride, bottomOffset, this._positionOptions);
             this._ass = await libjass.ASS.fromString(processedContent);
 
             // Re-creating the renderer is the only way to apply ASS object changes
@@ -405,179 +316,24 @@ html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .l
         }
     }
 
-    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null) {
+    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, dialoguePositionOverride = false, bottomOffset = 0, positionOptions = {}) {
         if (!content) return content;
 
-        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}`);
+        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}, position=${JSON.stringify(positionOptions)}`);
 
-        const lines = content.split(/\r?\n/);
-
-        // =====================================================================
-        // Inject missing PlayResX / PlayResY into the [Script Info] section.
-        //
-        // libjass is strictly unforgiving: if resolutionX or resolutionY is
-        // undefined after parsing the whole file it throws "Malformed ASS
-        // script." and rejects the entire track.  Jellyfin's FFmpeg extraction
-        // pipeline (e.g. remuxing from MKV to TS, or extracting from MP4)
-        // often strips these fields from the Script Info block.
-        //
-        // We scan for their presence upfront and, when absent, inject safe
-        // defaults right after the ScriptType declaration so the rest of the
-        // pre-processor loop runs on already-valid content.
-        // =====================================================================
-        // ====================================================================
-        // Fix PlayResX / PlayResY — must be present AND non-zero.
-        //
-        // When libjass encounters PlayResX=0 or PlayResY=0 (explicitly set to
-        // zero, or missing entirely) it divides by those values when computing
-        // every subtitle position.  This produces Infinity/NaN CSS values which
-        // trigger massive browser style-recalculation on EVERY tick, freezing
-        // the entire UI whenever the user seeks, chapter-jumps, or scrubs.
-        //
-        // We also handle Jellyfin's FFmpeg extraction quirk where the resolution
-        // fields are completely stripped from the [Script Info] block.
-        // ====================================================================
-
-        /**
-         * Parse the numeric value from a "PlayResX: NNN" line, or -1 if absent.
-         * @param {string} key
-         */
-        const getPlayRes = (key) => {
-            const line = lines.find(l => new RegExp(`^${key}\\s*:`, 'i').test(l.trim()));
-            if (!line) return -1; // missing entirely
-            return parseInt(line.split(':')[1], 10) || 0; // 0 if value is "0" or NaN
-        };
-
-        const resX = getPlayRes('PlayResX');
-        const resY = getPlayRes('PlayResY');
-
-        /*
-         * The standard ASS specification defaults to 384x288 when PlayRes fields 
-         * are missing. If we use video dimensions (e.g. 1920x1080), fonts sized
-         * for the smaller 288p canvas will appear tiny on screen. 
-         */
-        const safeResX = 384;
-        const safeResY = 288;
-
-        if (resX <= 0 || resY <= 0) {
-            log.warn(`ASS script has invalid PlayRes (${resX}x${resY}) — patching to ${safeResX}x${safeResY}`);
-
-            // Inject after [Script Info] to ensure it's in the correct section
-            const scriptInfoIdx = lines.findIndex(l => /^\[Script Info\]/i.test(l.trim()));
-            const insertAt = scriptInfoIdx !== -1 ? scriptInfoIdx + 1 : 0;
-
-            // Helper: replace in-place if the line already exists (to avoid duplication)
-            const setPlayRes = (key, value) => {
-                const idx = lines.findIndex(l => new RegExp(`^${key}\\s*:`, 'i').test(l.trim()));
-                if (idx !== -1) {
-                    lines[idx] = `${key}: ${value}`;
-                } else {
-                    lines.splice(insertAt, 0, `${key}: ${value}`);
-                }
-            };
-
-            setPlayRes('PlayResX', safeResX);
-            setPlayRes('PlayResY', safeResY);
-        }
-
-        let styleFormat = null;
-        let stylesOverridden = 0;
-        const shouldOverrideOutline = outlineThickness !== null && outlineThickness !== undefined;
-        const shouldOverrideShadow = shadowThickness !== null && shadowThickness !== undefined;
-
-        const processedLines = lines.map(line => {
-            const trimmed = line.trim();
-            
-            // 1. Capture the Styles format line
-            if (trimmed.startsWith('Format:') && (trimmed.includes('Outline') || trimmed.includes('Fontname'))) {
-                styleFormat = trimmed.substring(trimmed.indexOf(':') + 1).split(',').map(s => s.trim());
-                log.debug(`Found Styles Format: ${styleFormat.join(', ')}`);
-                return line;
-            }
-            
-            // 2. Override Style definitions
-            if (trimmed.startsWith('Style:') && styleFormat) {
-                const parts = line.substring(line.indexOf(':') + 1).split(',');
-                
-                // Log the original Fontname so we can cross-check against registered @font-face aliases
-                const fontIdx = styleFormat.indexOf('Fontname');
-                const originalFontname = fontIdx !== -1 ? parts[fontIdx].trim() : '(unknown)';
-                log.debug(`ASS Style Fontname: "${originalFontname}" — will ${(fontFamily && fontFamily !== 'null') ? 'override with "' + fontFamily + '"' : 'keep original (no override)'}`);
-
-                // Track whether we actually changed anything in this style line,
-                // so stylesOverridden only counts lines we genuinely mutated.
-                let didOverride = false;
-
-                // Override Fontname — only when fontFamily is a real non-null string.
-                // The string 'null' must also be explicitly rejected: it can appear if
-                // the value was stored in localStorage as a serialised null and then
-                // read back as a string, which is truthy and would clobber every Style
-                // with the literal text "null".
-                if (fontIdx !== -1 && fontFamily && fontFamily !== 'null') {
-                    parts[fontIdx] = fontFamily;
-                    didOverride = true;
-                }
-                
-                // Native Fontsize scaling removed.
-                // We now scale the entire .libjass-subs wrapper via CSS transform.
-                // Modifying Fontsize natively breaks absolute \pos layout coordinates in Karaoke templates.
-
-                // Override Outline — null means "don't override; use the value from the ASS file"
-                const outlineIdx = styleFormat.indexOf('Outline');
-                if (outlineIdx !== -1 && shouldOverrideOutline) {
-                    parts[outlineIdx] = String(outlineThickness);
-                    didOverride = true;
-                }
-                
-                // Override Shadow — null means "don't override; use the value from the ASS file"
-                const shadowIdx = styleFormat.indexOf('Shadow');
-                if (shadowIdx !== -1 && shouldOverrideShadow) {
-                    parts[shadowIdx] = String(shadowThickness);
-                    didOverride = true;
-                }
-                
-                // Only count the override if we actually changed something.
-                if (didOverride) stylesOverridden++;
-                // Adding a space after "Style: " for standard ASS compatibility
-                return 'Style: ' + parts.join(',');
-            }
-
-            // 3. Strip inline overrides only for the settings the user chose to
-            // override. When outline/shadow override is disabled, preserve the
-            // file's own ASS styling exactly instead of removing per-line tags.
-            if (trimmed.startsWith('Dialogue:')) {
-                /*
-                 * Strip per-dialogue font/border/shadow overrides that conflict
-                 * with the style-level values we enforced above.
-                 *
-                 * IMPORTANT: Exclude ')' from the match character class so we
-                 * never consume the closing paren of a \t() animation block.
-                 * Original regex used [^\\}]+ which would swallow ')', silently
-                 * corrupting the ASS tag structure in karaoke/fx tracks and
-                 * producing garbled positioning for \pos()-based subtitles.
-                 */
-                return line.replace(/\\(fn|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, (match, tag) => {
-                    if (tag === 'fn') {
-                        return fontFamily ? '' : match;
-                    }
-
-                    if (tag.includes('out') || tag.includes('bord')) {
-                        return shouldOverrideOutline ? '' : match;
-                    }
-
-                    if (tag.includes('shad')) {
-                        return shouldOverrideShadow ? '' : match;
-                    }
-
-                    return match;
-                });
-            }
-
-            return line;
+        const result = preProcessAssContent(content, {
+            fontFamily,
+            fontScale,
+            outlineThickness,
+            shadowThickness,
+            dialoguePositionOverride,
+            bottomOffset,
+            ...positionOptions,
+            videoHeight: this._videoHeight
         });
 
-        log.info(`ASS Pre-processor: Overrode ${stylesOverridden} style(s) with font "${fontFamily}"`);
-        return processedLines.join('\n');
+        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); coalesced ${result.coalescedSignRuns || 0} dense sign run(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
+        return result.content;
     }
 
     /**
@@ -741,13 +497,7 @@ html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .l
         this._wrapper.style.width = '100%';
         this._wrapper.style.height = '100%';
         this._wrapper.style.pointerEvents = 'none';
-        
-        // On WebOS 1/2 (Chrome 38), the hardware video plane is punched through the DOM.
-        // We must elevate the wrapper to z-index: 50 to render above the video, 
-        // matching the normal subtitle overlay tier.
-        const isUltraLegacy = document.documentElement.getAttribute('data-layout-tier') === 'ultra-legacy';
-        this._wrapper.style.zIndex = isUltraLegacy ? '50' : '1';
-        
+        this._wrapper.style.zIndex = '1';
         /*
          * Force LTR on the wrapper regardless of the document direction.
          * libjass uses absolute CSS pixel positioning for \pos() coordinates.
@@ -905,12 +655,6 @@ html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-bottom-offset .l
         if (this._videoElement) {
             videoWidth = this._videoElement.videoWidth || this._videoWidth;
             videoHeight = this._videoElement.videoHeight || this._videoHeight;
-        }
-        
-        // Prevent NaN calculations if video dimensions are 0 (e.g. during early initialization or audio-only)
-        if (!videoWidth || !videoHeight) {
-            videoWidth = 1280;
-            videoHeight = 720;
         }
 
         // Container dimensions (what space we have to render in)
