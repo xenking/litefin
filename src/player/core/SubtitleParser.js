@@ -91,10 +91,15 @@ export class SubtitleParser {
                 }
 
                 if (textLines.length > 0) {
+                    const cleanedText = this._cleanText(textLines.join('<br>'));
+                    if (!cleanedText.trim()) {
+                        continue;
+                    }
+
                     cues.push({
                         start,
                         end,
-                        text: this._cleanText(textLines.join('<br>'))
+                        text: cleanedText
                     });
                 }
             } else {
@@ -145,10 +150,15 @@ export class SubtitleParser {
                 // Text is everything after timing line
                 const textLines = lines.slice(timingLineIndex + 1);
                 if (textLines.length > 0) {
+                    const cleanedText = this._cleanText(textLines.join('<br>'));
+                    if (!cleanedText.trim()) {
+                        continue;
+                    }
+
                     cues.push({
                         start,
                         end,
-                        text: this._cleanText(textLines.join('<br>'))
+                        text: cleanedText
                     });
                 }
             }
@@ -211,8 +221,9 @@ export class SubtitleParser {
                 // Extract text content, preserving line breaks from <br> elements
                 const text = this._extractTTMLText(p);
 
-                if (text.trim().length > 0) {
-                    cues.push({ start, end, text: this._cleanText(text) });
+                const cleanedText = this._cleanText(text);
+                if (cleanedText.trim().length > 0) {
+                    cues.push({ start, end, text: cleanedText });
                 }
             }
         } catch (err) {
@@ -361,6 +372,44 @@ export class SubtitleParser {
          * The regex /\{[^\}]*\}/g is performant as it avoids backtracking issues
          * by matching any character that is NOT a closing brace.
          */
-        return text.replace(/\{[^}]*\}/g, '');
+        const withoutAssTags = text.replace(/\{[^}]*\}/g, '');
+
+        /*
+         * Jellyfin's ASS→VTT conversion can leak ASS vector drawing payloads as
+         * plain text, e.g. "{\p1}m 0 0 l 100 0 100 100 0 100{\p0}".
+         * In real ASS rendering this is a rectangle/sign background, not text.
+         * If we are in text fallback mode (or secondary subtitles, which are
+         * always VTT text), showing those commands is worse than dropping the
+         * non-text cue entirely.
+         */
+        if (this._isAssVectorDrawingText(text, withoutAssTags)) {
+            return '';
+        }
+
+        return withoutAssTags;
+    }
+
+    /**
+     * Detect ASS vector drawing commands that leaked through server text
+     * conversion. Keep normal dialogue intact; only hide pure drawing payloads.
+     * @private
+     */
+    static _isAssVectorDrawingText(originalText, cleanedText) {
+        if (!/\\p[1-9]\d*/i.test(originalText)) {
+            return false;
+        }
+
+        const normalized = cleanedText
+            .replace(/<br\s*\/?>/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!normalized) {
+            return false;
+        }
+
+        // ASS drawing text is command letters (m/l/b) followed by coordinate
+        // numbers. This intentionally does not match normal prose.
+        return /^(?:[mlb]\s+(?:[-+]?\d+(?:\.\d+)?\s*){2,6})+$/i.test(normalized);
     }
 }
