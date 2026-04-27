@@ -854,7 +854,7 @@
     "UsernameRequired": "Username is required",
     "VerticalPosition": "Vertical Position",
     "VerticalPositionAss": "Vertical Position (ASS)",
-    "VerticalPositionAssDescription": "Bottom offset for plain ASS dialogue when dialogue position override is enabled.",
+    "VerticalPositionAssDescription": "Extra lift for plain ASS dialogue; the normal Vertical position setting can move dialogue to the top.",
     "VerticalPositionDescription": "Subtitle vertical position",
     "VerticalSpacingAss": "Vertical Spacing (ASS)",
     "VerticalSpacingAssDescription": "Adjust gap between lines",

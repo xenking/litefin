@@ -2474,7 +2474,7 @@ class SettingsPage extends Page {
                             'subtitle-bottom-offset',
                             PlayerSettings.get('subtitleBottomOffset') ?? 0,
                             -100,
-                            750,
+                            1600,
                             5,
                             'px'
                         )}

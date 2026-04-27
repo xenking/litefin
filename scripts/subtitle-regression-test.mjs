@@ -31,6 +31,27 @@ Dialogue: 0,0:02:32.84,0:02:34.84,Window Sign,,0000,0000,0000,,{\\an1\\p1\\pos(-
 Dialogue: 0,0:02:21.41,0:02:26.00,Yahari-OP,,0000,0000,0000,,Хочу я помечтать...
 `;
 
+const denseAnimatedSignAss = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Window Sign,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:02:39.84,0:02:39.88,Window Sign,,0000,0000,0000,,{\\pos(472,234)\\fscx50}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:39.88,0:02:39.93,Window Sign,,0000,0000,0000,,{\\pos(472.39,234.01)\\fscx50.06}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:39.93,0:02:39.97,Window Sign,,0000,0000,0000,,{\\pos(472.77,234.08)\\fscx50.12}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:39.97,0:02:40.01,Window Sign,,0000,0000,0000,,{\\pos(473.1,234.17)\\fscx50.21}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:40.01,0:02:40.05,Window Sign,,0000,0000,0000,,{\\pos(473.49,234.22)\\fscx50.28}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:40.05,0:02:40.09,Window Sign,,0000,0000,0000,,{\\pos(473.83,234.34)\\fscx50.37}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:40.09,0:02:40.13,Window Sign,,0000,0000,0000,,{\\pos(474.23,234.39)\\fscx50.44}Летние курсы\\NЙойоги
+Dialogue: 0,0:02:40.13,0:02:40.18,Window Sign,,0000,0000,0000,,{\\pos(474.62,234.45)\\fscx50.5}Летние курсы\\NЙойоги
+`;
+
 function styleLine(content, name) {
     return content.split(/\r?\n/).find(line => line.startsWith(`Style: ${name},`));
 }
@@ -39,8 +60,16 @@ function marginV(content, name) {
     return styleLine(content, name).split(',')[21];
 }
 
+function alignment(content, name) {
+    return styleLine(content, name).split(',')[18];
+}
+
 function dialogueLine(content, text) {
     return content.split(/\r?\n/).find(line => line.includes(text));
+}
+
+function dialogueLines(content) {
+    return content.split(/\r?\n/).filter(line => line.startsWith('Dialogue:'));
 }
 
 {
@@ -65,6 +94,32 @@ function dialogueLine(content, text) {
 
 {
     const result = preProcessAssContent(oregairuLikeAss, {
+        dialoguePositionOverride: true,
+        bottomOffset: 750,
+        verticalPosition: '0',
+        videoHeight: 1080
+    });
+
+    assert.equal(alignment(result.content, 'Main-Yahari'), '8', 'top preset should move only plain main dialogue to top-center alignment');
+    assert.equal(marginV(result.content, 'Main-Yahari'), '14.4', 'top preset should use a top margin instead of the bottom offset slider');
+    assert.equal(alignment(result.content, 'Window Sign'), '2', 'sign style alignment should remain unchanged');
+    assert.equal(marginV(result.content, 'Window Sign'), '40', 'sign style margin should remain unchanged');
+}
+
+{
+    const result = preProcessAssContent(oregairuLikeAss, {
+        dialoguePositionOverride: true,
+        bottomOffset: 1200,
+        verticalPosition: '-2',
+        videoHeight: 1080
+    });
+
+    assert.equal(alignment(result.content, 'Main-Yahari'), '2', 'bottom preset should keep bottom alignment');
+    assert.equal(marginV(result.content, 'Main-Yahari'), '850.4', 'bottom preset should allow offsets beyond the old 750px cap');
+}
+
+{
+    const result = preProcessAssContent(oregairuLikeAss, {
         dialoguePositionOverride: false,
         bottomOffset: 600,
         videoHeight: 1080,
@@ -75,6 +130,15 @@ function dialogueLine(content, text) {
     assert.equal(marginV(result.content, 'Main-Yahari'), '30', 'position override off should preserve ASS margin');
     assert.match(styleLine(result.content, 'Main-Yahari'), /Main-Yahari,Arial,48/, 'empty ASS font setting should preserve file font');
     assert.match(dialogueLine(result.content, 'Подготовительные занятия'), /\\bord4\\shad2/, 'inline ASS border/shadow should be preserved when override is off');
+}
+
+{
+    const result = preProcessAssContent(denseAnimatedSignAss);
+    const dialogues = dialogueLines(result.content);
+
+    assert.equal(result.coalescedSignRuns, 1, 'dense sign micro-cues should be coalesced into one run');
+    assert.equal(dialogues.length, 1, 'coalesced sign should render as one stable cue instead of many 40ms cues');
+    assert.match(dialogues[0], /0:02:39\.84,0:02:40\.18/, 'coalesced sign should span the original animated run');
 }
 
 {
