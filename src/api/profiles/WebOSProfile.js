@@ -658,7 +658,24 @@ export function buildJellyfinProfile(options = {}) {
         {
             Type: 'Video',
             Codec: 'h264',
-            Conditions: [{ Condition: 'LessThanEqual', Property: 'VideoLevel', Value: h264Level, IsRequired: false }]
+            Conditions: [
+                {
+                    Condition: 'EqualsAny',
+                    Property: 'VideoProfile',
+                    Value: 'high|main|baseline|constrained baseline',
+                    IsRequired: false
+                },
+                { Condition: 'LessThanEqual', Property: 'VideoLevel', Value: h264Level, IsRequired: false },
+                /*
+                 * LG WebOS native playback supports ordinary 8-bit H.264 profiles
+                 * (BP/MP/HP), but rejects 10-bit H.264 / High 10 MKVs with
+                 * MEDIA_ELEMENT_ERROR: Format error. Jellyfin-web works because it
+                 * transcodes these files instead of feeding the original MKV to the
+                 * TV decoder. Keep H.264 DirectPlay limited to 8-bit so anime
+                 * encodes like Oregairu High 10 route through the server pipeline.
+                 */
+                { Condition: 'LessThanEqual', Property: 'VideoBitDepth', Value: '8', IsRequired: false }
+            ]
         },
         // -----------------------------------------------------------------------
         // Block interlaced TS/MPEGTS from DirectPlay.
