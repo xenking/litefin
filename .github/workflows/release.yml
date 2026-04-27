@@ -6,6 +6,7 @@ on:
       - release
     tags:
       - 'v*'
+      - 'xk-v*'
   workflow_dispatch:
 
 permissions:
@@ -130,6 +131,21 @@ jobs:
             fi
             echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Clean rolling release assets
+        if: steps.target.outputs.rolling == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.target.outputs.tag_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release view "${{ steps.target.outputs.tag_name }}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' |
+              while IFS= read -r asset; do
+                [[ -n "$asset" ]] || continue
+                gh release delete-asset "${{ steps.target.outputs.tag_name }}" "$asset" --repo "${{ github.repository }}" -y || true
+              done
+          fi
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

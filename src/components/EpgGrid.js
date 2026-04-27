@@ -12,7 +12,6 @@ import { api } from '../api/index.js';
 import { focusManager } from '../ui/FocusManager.js';
 import { logger } from '../utils/Logger.js';
 import { i18n } from '../utils/i18n.js';
-import { scrollController } from '../ui/ScrollController.js';
 import { eventBus } from '../core/EventBus.js';
 
 const log = logger.create('EpgGrid');

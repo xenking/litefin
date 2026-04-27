@@ -418,6 +418,19 @@ class SettingsPage extends Page {
                     </div>
                 </div>
 
+                <div class="setting-item" id="mdb-awards-item" style="display: ${pluginManager.isEnabled('mdblist-ratings') ? '' : 'none'}">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="ShowMdbAwards">${i18n.t('ShowMdbAwards') || 'Show Awards Badges'}</span>
+                        <span class="setting-description" data-i18n="ShowMdbAwardsDescription">${i18n.t('ShowMdbAwardsDescription') || 'Display award badges from MDBList on the details page.'}</span>
+                    </div>
+                    <div class="setting-control">
+                         <button class="toggle-switch ${storage.getItem('pref:showMdbAwards') !== 'false' ? 'active' : ''}" 
+                                 id="toggle-mdb-awards" 
+                                 tabindex="0">
+                        </button>
+                    </div>
+                </div>
+
                 <div class="setting-item">
                     <div class="setting-label">
                         <span class="setting-name" data-i18n="RoundedCorners">${i18n.t('RoundedCorners')}</span>
@@ -1602,6 +1615,20 @@ class SettingsPage extends Page {
                         </button>
                     </div>
                 </div>
+
+                <div class="setting-item">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="ForceDirectPlay">${i18n.t('ForceDirectPlay') || 'Force Direct Play'}</span>
+                        <span class="setting-description" data-i18n="ForceDirectPlayDescription">${i18n.t('ForceDirectPlayDescription') || 'Forces direct play for all media formats. May cause playback failure if the device does not support the format natively.'}</span>
+                    </div>
+                    <div class="setting-control">
+                        <button class="toggle-switch ${PlayerSettings.get('forceDirectPlay') ? 'active' : ''}" 
+                                id="toggle-force-direct-play" 
+                                data-setting="forceDirectPlay"
+                                tabindex="0">
+                        </button>
+                    </div>
+                </div>
             </div>
         `;
     }
@@ -1666,6 +1693,20 @@ class SettingsPage extends Page {
                             ],
                             PlayerSettings.get('subtitleBurnIn') || ''
                         )}
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <div class="setting-label">
+                        <span class="setting-name" data-i18n="LabelRememberTracksForSession">${i18n.t('LabelRememberTracksForSession') || 'Remember Tracks for Session'}</span>
+                        <span class="setting-description" data-i18n="RememberTracksForSessionDescription">${i18n.t('RememberTracksForSessionDescription') || 'Automatically carry your active audio and subtitle tracks to the next episode.'}</span>
+                    </div>
+                    <div class="setting-control">
+                         <button class="toggle-switch ${PlayerSettings.get('rememberTracksForSession') !== false ? 'active' : ''}" 
+                                 id="subtitle-remember-tracks-toggle" 
+                                 data-setting="rememberTracksForSession"
+                                 tabindex="0">
+                        </button>
                     </div>
                 </div>
 
@@ -2620,6 +2661,18 @@ class SettingsPage extends Page {
             });
         }
 
+        // Toggle MDBList Awards
+        const mdbAwardsBtn = this.$('#toggle-mdb-awards');
+        if (mdbAwardsBtn) {
+            mdbAwardsBtn.addEventListener('click', () => {
+                const isEnabled = storage.getItem('pref:showMdbAwards') !== 'false';
+                const newValue = !isEnabled;
+                storage.setItem('pref:showMdbAwards', newValue.toString());
+                mdbAwardsBtn.classList.toggle('active', newValue);
+                log.info(`Show MDBList Awards set to: ${newValue}`);
+            });
+        }
+
         // Toggle Hero Carousel
         const heroCarouselBtn = this.$('#toggle-hero-carousel');
         if (heroCarouselBtn) {
@@ -2648,7 +2701,8 @@ class SettingsPage extends Page {
                 if (indicatorAnimItem) indicatorAnimItem.style.display = newValue ? '' : 'none';
                 if (intervalItem) intervalItem.style.display = newValue ? '' : 'none';
                 if (countItem) countItem.style.display = newValue ? '' : 'none';
-                if (mdbItem) mdbItem.style.display = newValue && pluginManager.isEnabled('mdblist-ratings') ? '' : 'none';
+                if (mdbItem)
+                    mdbItem.style.display = newValue && pluginManager.isEnabled('mdblist-ratings') ? '' : 'none';
 
                 focusManager.invalidateCache('settings-content');
                 log.info(`Hero Carousel set to: ${newValue}`);
@@ -2928,6 +2982,7 @@ class SettingsPage extends Page {
             'toggle-enable-fmp4-hls',
             'toggle-force-fmp4-hls',
             'toggle-force-transcode',
+            'toggle-force-direct-play',
             'toggle-background-service',
             // Interlaced content fallback — auto-switch to HTML5 when AVPlay
             // encounters interlaced H264 (1080i MPEG-TS in HLS). No profile
@@ -3045,7 +3100,7 @@ class SettingsPage extends Page {
                 // ── Enabling: check server dependency first ───────────────────
                 // Check if this plugin requires a Jellyfin server plugin to function.
                 const entry = pluginManager.getPlugin(pluginId);
-                const hasDependency = !!(entry?.plugin?.serverDependency);
+                const hasDependency = !!entry?.plugin?.serverDependency;
 
                 if (hasDependency) {
                     // Show a "checking..." interim state so the user knows something is happening
@@ -3077,9 +3132,10 @@ class SettingsPage extends Page {
                         // If deferred, we allow enabling tentatively (consistent with startup flow).
                         // The dependency will be re-confirmed at next playback.
                         if (depCheck.deferred) {
-                            log.warn(`Plugin '${pluginId}' dependency check deferred (non-admin, no itemId) — enabling tentatively`);
+                            log.warn(
+                                `Plugin '${pluginId}' dependency check deferred (non-admin, no itemId) — enabling tentatively`
+                            );
                         }
-
                     } catch (err) {
                         // Network or unexpected error — fail open (allow enabling)
                         log.warn(`Plugin '${pluginId}' dependency check failed with error, enabling anyway:`, err);
@@ -3366,7 +3422,9 @@ class SettingsPage extends Page {
         this._prevSection = focusManager.getActiveSection();
 
         const title = i18n.t('MissingServerPlugin') || 'Missing Server Plugin';
-        const message = i18n.t('MissingServerPluginMessage', pluginName, dependencyName) || `'${pluginName}' requires the '${dependencyName}' plugin to be installed and enabled on your Jellyfin server. Please install it via the Jellyfin dashboard and try again.`;
+        const message =
+            i18n.t('MissingServerPluginMessage', { pluginName }, { dependencyName }) ||
+            `'${pluginName}' requires the '${dependencyName}' plugin to be installed and enabled on your Jellyfin server. Please install it via the Jellyfin dashboard and try again.`;
         const btnCloseText = i18n.t('ButtonClose') || 'Close';
 
         overlay.innerHTML = `
@@ -3712,6 +3770,18 @@ class SettingsPage extends Page {
                 PlayerSettings.set('disableAssStyling', newValue);
                 forceTextToggle.classList.toggle('active', newValue);
                 log.info(`Force Text Mode set to: ${newValue}`);
+            });
+        }
+
+        // Toggle Switch for Remember Tracks
+        const rememberTracksToggle = this.$('#subtitle-remember-tracks-toggle');
+        if (rememberTracksToggle) {
+            rememberTracksToggle.addEventListener('click', () => {
+                const currentValue = PlayerSettings.get('rememberTracksForSession') !== false;
+                const newValue = !currentValue;
+                PlayerSettings.set('rememberTracksForSession', newValue);
+                rememberTracksToggle.classList.toggle('active', newValue);
+                log.info(`Remember Tracks For Session set to: ${newValue}`);
             });
         }
 
