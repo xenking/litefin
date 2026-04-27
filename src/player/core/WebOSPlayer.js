@@ -346,23 +346,18 @@ export class WebOSPlayer {
         // MIME types like 'video/x-matroska' causes the Chromium layer to
         // silently reject the source before the media pipeline sees it.
         video.src = options.url;
-        video.autoplay = true;
 
         video.load();
 
         return new Promise((resolve, reject) => {
-            const onLoadedMetadata = () => {
-                video.removeEventListener('loadedmetadata', onLoadedMetadata);
-                this._applyInitialTracks(options);
-            };
-
             const onCanPlay = () => {
                 video.removeEventListener('canplay', onCanPlay);
                 video.removeEventListener('error', onError);
 
-                if (options.playerStartPositionTicks) {
-                    // Pre-seek logic disabled here; robust resume will handle it
-                }
+                // Apply audio/subtitle tracks at canplay — same timing as _playNativeHls.
+                // audioTracks is not reliably populated at loadedmetadata on WebOS native
+                // player, so doing it here (before play()) ensures the array is ready.
+                this._applyInitialTracks(options);
 
                 video.play()
                     .then(() => {
@@ -374,11 +369,9 @@ export class WebOSPlayer {
 
             const onError = () => {
                 video.removeEventListener('canplay', onCanPlay);
-                video.removeEventListener('loadedmetadata', onLoadedMetadata);
                 reject(video.error || new Error('Direct playback load failed'));
             };
 
-            video.addEventListener('loadedmetadata', onLoadedMetadata);
             video.addEventListener('canplay', onCanPlay);
             video.addEventListener('error', onError);
         });
@@ -463,42 +456,31 @@ export class WebOSPlayer {
             const playMethod = options.playMethod;
             const isServerSelectedHlsAudio = options.isHls && (
                 playMethod === 'Transcode' ||
-                playMethod === 'DirectStream' ||
-                playMethod === 'Remux'
+                playMethod === 'DirectStream'
             );
+
+            // Convert Jellyfin stream index (e.g. 1) to 0-based audio-only list index (e.g. 0)
+            // so it maps correctly onto hls.audioTracks / video.audioTracks arrays.
+            const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
+            const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
+            const resolvedIndex = listIndex >= 0 ? listIndex : 0;
 
             // For Jellyfin-generated HLS transcode/direct-stream sessions the requested
             // AudioStreamIndex is already baked into the manifest/segments by the server.
             // The browser/WebOS audioTracks list is therefore the HLS rendition list, not
             // the original Jellyfin MediaStreams array. Mapping stream Index=2 to list
             // index 1 can disable the only HLS audio track and produce silent playback.
-            if (isServerSelectedHlsAudio) {
-                if (hls) {
-                    const tracks = hls.audioTracks || [];
-                    if (tracks.length > 0) {
-                        hls.audioTrack = 0;
-                        log.info('WebOSPlayer: HLS audio is server-selected; keeping manifest audio track 0');
-                    }
-                } else {
-                    this.setAudioStreamIndex(0);
+            if (hls) {
+                const tracks = hls.audioTracks || [];
+                const outputIndex = (isServerSelectedHlsAudio || tracks.length <= 1) ? 0 : resolvedIndex;
+                if (outputIndex < tracks.length) {
+                    hls.audioTrack = outputIndex;
+                    log.debug('WebOSPlayer: Hls.js audio track set to', outputIndex);
                 }
             } else {
-                // DirectPlay: convert Jellyfin stream index (e.g. 1) to 0-based
-                // audio-only list index (e.g. 0) so it maps onto hls.audioTracks /
-                // video.audioTracks arrays.
-                const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
-                const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
-                const resolvedIndex = listIndex >= 0 ? listIndex : 0;
-
-                if (hls) {
-                    if (resolvedIndex < hls.audioTracks.length) {
-                        hls.audioTrack = resolvedIndex;
-                        log.debug('WebOSPlayer: Hls.js audio track set to', resolvedIndex);
-                    }
-                } else {
-                    // Native: toggle HTML5 AudioTrack objects
-                    this.setAudioStreamIndex(resolvedIndex);
-                }
+                const nativeTracks = this._videoElement?.audioTracks;
+                const outputIndex = (!nativeTracks || nativeTracks.length <= 1) ? 0 : resolvedIndex;
+                this.setAudioStreamIndex(outputIndex);
             }
         }
 
@@ -809,6 +791,14 @@ export class WebOSPlayer {
             audioTracks[i].enabled = (i === targetIndex);
         }
         log.info('WebOSPlayer: Native audio track → list index', targetIndex);
+
+        // WebOS native media pipeline does not apply audioTracks.enabled changes
+        // mid-playback without a seek. A sub-frame back-seek (≤0.1 s) forces the
+        // hardware decoder to reinitialize with the new track state while staying
+        // in DirectPlay mode (preserving Dolby Vision passthrough).
+        if (video.readyState >= 2 /* HAVE_CURRENT_DATA */ && video.currentTime > 0.1) {
+            video.currentTime = video.currentTime - 0.1;
+        }
     }
 
     /**
