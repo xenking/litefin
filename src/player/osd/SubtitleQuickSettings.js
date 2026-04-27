@@ -76,6 +76,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
 
         // Whether the outline/shadow user overrides are enabled (default: true)
         const overrideOutlineShadow = PlayerSettings.get( 'subtitleOverrideAssOutlineShadow' ) !== false;
+        const dialoguePositionOverride = PlayerSettings.get( 'subtitleAssDialoguePositionOverride' ) === true;
 
         // Check if a secondary subtitle track is active
         // osd.currentSecondarySubtitleIndex is -1 when no secondary track is selected
@@ -289,7 +290,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 key: 'subtitleFontAss',
                 visible: isASS,
                 options: [
-                    { value: '', label: i18n.t('DefaultTizenSans') },
+                    { value: '', label: i18n.t('AssFileDefault') },
                     { value: 'poppins', label: i18n.t('ModernPoppins') },
                     { value: 'noto-arabic', label: i18n.t('ArabicNotoSans') },
                     { value: 'typewriter', label: i18n.t('Typewriter') },
@@ -310,13 +311,25 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 visible: isASS
             },
             {
+                id: 'dialoguePositionAss',
+                type: 'select',
+                label: i18n.t( 'AssDialoguePositionOverride' ),
+                labelKey: 'AssDialoguePositionOverride',
+                key: 'subtitleAssDialoguePositionOverride',
+                visible: isASS,
+                options: [
+                    { value: true, label: i18n.t( 'On' ) },
+                    { value: false, label: i18n.t( 'Off' ) }
+                ]
+            },
+            {
                 id: 'bottomOffsetAss',
                 type: 'slider',
                 label: i18n.t('VerticalPositionAss'),
                 labelKey: 'VerticalPositionAss',
                 key: 'subtitleBottomOffset',
                 min: -100, max: 750, step: 5, unit: 'px',
-                visible: isASS
+                visible: isASS && dialoguePositionOverride
             },
             {
                 id: 'overrideOutlineShadow',

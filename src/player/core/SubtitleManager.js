@@ -445,8 +445,9 @@ export default class SubtitleManager {
         // SRT/VTT track is active, triggering an unwanted overlay.
         // =================================================================
         if (this._assRenderer && this._primaryDelivery === DeliveryMethod.ASS_CANVAS) {
-            const fontClass = SubtitleStyles.getFontClassName('subtitleFontAss');
-            const fontFamily = SubtitleStyles.getFontFamily('subtitleFontAss');
+            const assFont = PlayerSettings.get('subtitleFontAss') || '';
+            const fontClass = assFont ? SubtitleStyles.getFontClassName('subtitleFontAss') : null;
+            const fontFamily = assFont ? SubtitleStyles.getFontFamily('subtitleFontAss') : null;
             const fontScale = SubtitleStyles.getFontScale('subtitleFontAss');
             // When the override toggle is off, pass null so the ASS file's own outline/shadow values are kept
             const overrideOutlineShadow = PlayerSettings.get('subtitleOverrideAssOutlineShadow') !== false;
@@ -455,9 +456,8 @@ export default class SubtitleManager {
             const lineHeight = PlayerSettings.get('subtitleLineHeight');
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
-            if (fontClass && fontFamily) {
-                await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset);
-            }
+            const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
         }
     }
 
@@ -669,8 +669,9 @@ export default class SubtitleManager {
             await this._assRenderer.setTrack(content);
             
             // Apply current subtitle font override
-            const fontClass = SubtitleStyles.getFontClassName('subtitleFontAss');
-            const fontFamily = SubtitleStyles.getFontFamily('subtitleFontAss');
+            const assFont = PlayerSettings.get('subtitleFontAss') || '';
+            const fontClass = assFont ? SubtitleStyles.getFontClassName('subtitleFontAss') : null;
+            const fontFamily = assFont ? SubtitleStyles.getFontFamily('subtitleFontAss') : null;
             const fontScale = SubtitleStyles.getFontScale('subtitleFontAss');
             // When the override toggle is off, pass null so the ASS file's own outline/shadow values are kept
             const overrideOutlineShadow = PlayerSettings.get('subtitleOverrideAssOutlineShadow') !== false;
@@ -679,9 +680,8 @@ export default class SubtitleManager {
             const lineHeight = PlayerSettings.get('subtitleLineHeight');
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
-            if (fontClass && fontFamily) {
-                await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset);
-            }
+            const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
 
             this._assRenderer.show();
 

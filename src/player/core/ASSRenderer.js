@@ -19,6 +19,7 @@
 import libjass from 'libjass';
 import 'libjass/libjass.css';
 import { logger } from '../../utils/Logger.js';
+import { preProcessAssContent } from './AssStylePreprocessor.js';
 
 const log = logger.create('ASSRenderer');
 
@@ -195,7 +196,9 @@ export default class ASSRenderer {
                 this._fontFamily,
                 this._fontScale || 1.0,
                 this._outlineThickness ?? null,
-                this._shadowThickness ?? null
+                this._shadowThickness ?? null,
+                this._dialoguePositionOverride || false,
+                this._bottomOffset || 0
             );
             
             this._ass = await libjass.ASS.fromString(processedContent);
@@ -248,20 +251,12 @@ export default class ASSRenderer {
         // Spacing overrides
         const hasLineHeight = this._lineHeight !== undefined && this._lineHeight !== 0;
         const hasLetterSpacing = this._letterSpacing !== undefined && this._letterSpacing !== 0;
-        const hasBottomOffset = this._bottomOffset !== undefined && this._bottomOffset !== 0;
 
         if (hasLineHeight) {
             this._wrapper.style.setProperty('--ass-vertical-spacing', this._lineHeight + 'px');
             classNames.push('override-line-height');
         } else {
             this._wrapper.style.removeProperty('--ass-vertical-spacing');
-        }
-
-        if (hasBottomOffset) {
-            this._wrapper.style.setProperty('--ass-bottom-offset', this._bottomOffset + 'px');
-            classNames.push('override-bottom-offset');
-        } else {
-            this._wrapper.style.removeProperty('--ass-bottom-offset');
         }
 
         if (hasLetterSpacing) {
@@ -275,8 +270,8 @@ export default class ASSRenderer {
         log.debug(`Wrapper updated: className="${this._wrapper.className}", lineH=${this._lineHeight}, bottom=${this._bottomOffset}, letterS=${this._letterSpacing}`);
     }
 
-    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0) {
-        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}`);
+    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0, dialoguePositionOverride = false) {
+        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}`);
         this._fontClass = className;
         this._fontFamily = fontFamily;
         this._fontScale = fontScale;
@@ -285,6 +280,7 @@ export default class ASSRenderer {
         this._lineHeight = lineHeight;
         this._letterSpacing = letterSpacing;
         this._bottomOffset = bottomOffset;
+        this._dialoguePositionOverride = dialoguePositionOverride;
 
         this._updateWrapperStyles();
 
@@ -294,7 +290,7 @@ export default class ASSRenderer {
             // Re-preprocess and re-parse the entire string.
             // This is the most "Nuclear" and definitive way to ensure the new font
             // and border styles are applied throughout the entire track.
-            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness);
+            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness, dialoguePositionOverride, bottomOffset);
             this._ass = await libjass.ASS.fromString(processedContent);
 
             // Re-creating the renderer is the only way to apply ASS object changes
@@ -303,103 +299,23 @@ export default class ASSRenderer {
         }
     }
 
-    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null) {
+    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, dialoguePositionOverride = false, bottomOffset = 0) {
         if (!content) return content;
 
-        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}`);
+        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}`);
 
-        const lines = content.split(/\r?\n/);
-        let styleFormat = null;
-        let stylesOverridden = 0;
-        const shouldOverrideOutline = outlineThickness !== null && outlineThickness !== undefined;
-        const shouldOverrideShadow = shadowThickness !== null && shadowThickness !== undefined;
-
-        const processedLines = lines.map(line => {
-            const trimmed = line.trim();
-            
-            // 1. Capture the Styles format line
-            if (trimmed.startsWith('Format:') && (trimmed.includes('Outline') || trimmed.includes('Fontname'))) {
-                // Ensure we handle both "Format:" and "[V4 Styles]" headers correctly if needed
-                // For now we just parse the format line in the Styles section.
-                styleFormat = trimmed.substring(trimmed.indexOf(':') + 1).split(',').map(s => s.trim());
-                log.debug(`Found Styles Format: ${styleFormat.join(', ')}`);
-                return line;
-            }
-            
-            // 2. Override Style definitions
-            if (trimmed.startsWith('Style:') && styleFormat) {
-                const parts = line.substring(line.indexOf(':') + 1).split(',');
-                
-                // Override Fontname
-                const fontIdx = styleFormat.indexOf('Fontname');
-                if (fontIdx !== -1 && fontFamily) {
-                    parts[fontIdx] = fontFamily;
-                }
-                
-                // Override Fontsize - Scaling up if a specific boost is requested (e.g. for Noto Arabic)
-                const sizeIdx = styleFormat.indexOf('Fontsize');
-                if (sizeIdx !== -1 && fontFamily && fontScale !== 1.0) {
-                    const originalSize = parseFloat(parts[sizeIdx]);
-                    if (!isNaN(originalSize)) {
-                        parts[sizeIdx] = (originalSize * fontScale).toFixed(2);
-                    }
-                }
-                
-                // Override Outline — null means "don't override; use the value from the ASS file"
-                const outlineIdx = styleFormat.indexOf('Outline');
-                if (outlineIdx !== -1 && shouldOverrideOutline) {
-                    parts[outlineIdx] = String(outlineThickness);
-                }
-                
-                // Override Shadow — null means "don't override; use the value from the ASS file"
-                const shadowIdx = styleFormat.indexOf('Shadow');
-                if (shadowIdx !== -1 && shouldOverrideShadow) {
-                    parts[shadowIdx] = String(shadowThickness);
-                }
-                
-                if (fontFamily || shouldOverrideOutline || shouldOverrideShadow) {
-                    stylesOverridden++;
-                }
-                // Adding a space after "Style: " for standard ASS compatibility
-                return 'Style: ' + parts.join(',');
-            }
-
-            // 3. Strip inline overrides only for the settings the user chose to
-            // override. When outline/shadow override is disabled, preserve the
-            // file's own ASS styling exactly instead of removing per-line tags.
-            if (trimmed.startsWith('Dialogue:')) {
-                /*
-                 * Strip per-dialogue font/border/shadow overrides that conflict
-                 * with the style-level values we enforced above.
-                 *
-                 * IMPORTANT: Exclude ')' from the match character class so we
-                 * never consume the closing paren of a \t() animation block.
-                 * Original regex used [^\\}]+ which would swallow ')', silently
-                 * corrupting the ASS tag structure in karaoke/fx tracks and
-                 * producing garbled positioning for \pos()-based subtitles.
-                 */
-                return line.replace(/\\(fn|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, (match, tag) => {
-                    if (tag === 'fn') {
-                        return fontFamily ? '' : match;
-                    }
-
-                    if (tag.includes('out') || tag.includes('bord')) {
-                        return shouldOverrideOutline ? '' : match;
-                    }
-
-                    if (tag.includes('shad')) {
-                        return shouldOverrideShadow ? '' : match;
-                    }
-
-                    return match;
-                });
-            }
-
-            return line;
+        const result = preProcessAssContent(content, {
+            fontFamily,
+            fontScale,
+            outlineThickness,
+            shadowThickness,
+            dialoguePositionOverride,
+            bottomOffset,
+            videoHeight: this._videoHeight
         });
 
-        log.info(`ASS Pre-processor: Overrode ${stylesOverridden} style(s) with font "${fontFamily}"`);
-        return processedLines.join('\n');
+        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
+        return result.content;
     }
 
     /**

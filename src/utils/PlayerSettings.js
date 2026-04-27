@@ -118,6 +118,9 @@ const DEFAULTS = {
     // Vertical position offset for ASS (baseline is 0px)
     subtitleBottomOffset: 0,
 
+    // Move only plain primary ASS dialogue styles; preserve signs/typesetting positions
+    subtitleAssDialoguePositionOverride: false,
+
     // Enable user-defined outline and shadow thickness overrides for ASS
     subtitleOverrideAssOutlineShadow: false,
 
