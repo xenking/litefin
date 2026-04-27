@@ -191,11 +191,11 @@ export default class ASSRenderer {
             // Parse the raw ASS content into a structured ASS object
             log.info('Pre-processing ASS content for style enforcement...');
             const processedContent = this._preProcessAssContent(
-                content, 
-                this._fontFamily, 
-                this._fontScale || 1.0, 
-                this._outlineThickness || 0.8, 
-                this._shadowThickness || 0.5
+                content,
+                this._fontFamily,
+                this._fontScale || 1.0,
+                this._outlineThickness ?? null,
+                this._shadowThickness ?? null
             );
             
             this._ass = await libjass.ASS.fromString(processedContent);
@@ -275,7 +275,7 @@ export default class ASSRenderer {
         log.debug(`Wrapper updated: className="${this._wrapper.className}", lineH=${this._lineHeight}, bottom=${this._bottomOffset}, letterS=${this._letterSpacing}`);
     }
 
-    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = 0.8, shadowThickness = 0.5, lineHeight = 0, letterSpacing = 0, bottomOffset = 0) {
+    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0) {
         log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}`);
         this._fontClass = className;
         this._fontFamily = fontFamily;
@@ -303,7 +303,7 @@ export default class ASSRenderer {
         }
     }
 
-    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = 0.8, shadowThickness = 0.5) {
+    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null) {
         if (!content) return content;
 
         log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}`);
@@ -311,6 +311,8 @@ export default class ASSRenderer {
         const lines = content.split(/\r?\n/);
         let styleFormat = null;
         let stylesOverridden = 0;
+        const shouldOverrideOutline = outlineThickness !== null && outlineThickness !== undefined;
+        const shouldOverrideShadow = shadowThickness !== null && shadowThickness !== undefined;
 
         const processedLines = lines.map(line => {
             const trimmed = line.trim();
@@ -345,22 +347,26 @@ export default class ASSRenderer {
                 
                 // Override Outline — null means "don't override; use the value from the ASS file"
                 const outlineIdx = styleFormat.indexOf('Outline');
-                if (outlineIdx !== -1 && outlineThickness !== null && outlineThickness !== undefined) {
+                if (outlineIdx !== -1 && shouldOverrideOutline) {
                     parts[outlineIdx] = String(outlineThickness);
                 }
                 
                 // Override Shadow — null means "don't override; use the value from the ASS file"
                 const shadowIdx = styleFormat.indexOf('Shadow');
-                if (shadowIdx !== -1 && shadowThickness !== null && shadowThickness !== undefined) {
+                if (shadowIdx !== -1 && shouldOverrideShadow) {
                     parts[shadowIdx] = String(shadowThickness);
                 }
                 
-                stylesOverridden++;
+                if (fontFamily || shouldOverrideOutline || shouldOverrideShadow) {
+                    stylesOverridden++;
+                }
                 // Adding a space after "Style: " for standard ASS compatibility
                 return 'Style: ' + parts.join(',');
             }
 
-            // 3. Strip problematic inline overrides from Dialogues (\fn, \bord, \shad, etc.)
+            // 3. Strip inline overrides only for the settings the user chose to
+            // override. When outline/shadow override is disabled, preserve the
+            // file's own ASS styling exactly instead of removing per-line tags.
             if (trimmed.startsWith('Dialogue:')) {
                 /*
                  * Strip per-dialogue font/border/shadow overrides that conflict
@@ -372,7 +378,21 @@ export default class ASSRenderer {
                  * corrupting the ASS tag structure in karaoke/fx tracks and
                  * producing garbled positioning for \pos()-based subtitles.
                  */
-                return line.replace(/\\(fn|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, '');
+                return line.replace(/\\(fn|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, (match, tag) => {
+                    if (tag === 'fn') {
+                        return fontFamily ? '' : match;
+                    }
+
+                    if (tag.includes('out') || tag.includes('bord')) {
+                        return shouldOverrideOutline ? '' : match;
+                    }
+
+                    if (tag.includes('shad')) {
+                        return shouldOverrideShadow ? '' : match;
+                    }
+
+                    return match;
+                });
             }
 
             return line;
