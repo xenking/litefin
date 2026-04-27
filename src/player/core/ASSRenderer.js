@@ -59,6 +59,8 @@ export default class ASSRenderer {
         this._rawContent = null;
         // Last known playback time for nudging on style change
         this._lastTime = null;
+        this._positionOptions = {};
+        this._styleStateKey = null;
 
         /*
          * Seek debounce: when the user jumps a chapter or scrubs rapidly,
@@ -198,7 +200,8 @@ export default class ASSRenderer {
                 this._outlineThickness ?? null,
                 this._shadowThickness ?? null,
                 this._dialoguePositionOverride || false,
-                this._bottomOffset || 0
+                this._bottomOffset || 0,
+                this._positionOptions || {}
             );
             
             this._ass = await libjass.ASS.fromString(processedContent);
@@ -270,8 +273,20 @@ export default class ASSRenderer {
         log.debug(`Wrapper updated: className="${this._wrapper.className}", lineH=${this._lineHeight}, bottom=${this._bottomOffset}, letterS=${this._letterSpacing}`);
     }
 
-    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0, dialoguePositionOverride = false) {
-        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}`);
+    async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0, dialoguePositionOverride = false, positionOptions = {}) {
+        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}, position=${JSON.stringify(positionOptions)}`);
+        const nextStyleStateKey = JSON.stringify({
+            className,
+            fontFamily,
+            fontScale,
+            outlineThickness,
+            shadowThickness,
+            bottomOffset,
+            dialoguePositionOverride,
+            positionOptions
+        });
+        const shouldReparse = this._rawContent && nextStyleStateKey !== this._styleStateKey;
+
         this._fontClass = className;
         this._fontFamily = fontFamily;
         this._fontScale = fontScale;
@@ -281,16 +296,18 @@ export default class ASSRenderer {
         this._letterSpacing = letterSpacing;
         this._bottomOffset = bottomOffset;
         this._dialoguePositionOverride = dialoguePositionOverride;
+        this._positionOptions = positionOptions || {};
+        this._styleStateKey = nextStyleStateKey;
 
         this._updateWrapperStyles();
 
-        if (this._rawContent && fontFamily) {
-            log.info(`Re-parsing ASS with new font choice: ${fontFamily} (Scale: ${fontScale}, Out: ${outlineThickness}, Shad: ${shadowThickness})`);
+        if (shouldReparse) {
+            log.info(`Re-parsing ASS with updated style settings (Font: ${fontFamily || 'file default'}, Scale: ${fontScale}, Out: ${outlineThickness}, Shad: ${shadowThickness}, DialoguePos: ${dialoguePositionOverride})`);
             
             // Re-preprocess and re-parse the entire string.
             // This is the most "Nuclear" and definitive way to ensure the new font
             // and border styles are applied throughout the entire track.
-            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness, dialoguePositionOverride, bottomOffset);
+            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness, dialoguePositionOverride, bottomOffset, this._positionOptions);
             this._ass = await libjass.ASS.fromString(processedContent);
 
             // Re-creating the renderer is the only way to apply ASS object changes
@@ -299,10 +316,10 @@ export default class ASSRenderer {
         }
     }
 
-    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, dialoguePositionOverride = false, bottomOffset = 0) {
+    _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, dialoguePositionOverride = false, bottomOffset = 0, positionOptions = {}) {
         if (!content) return content;
 
-        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}`);
+        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}, position=${JSON.stringify(positionOptions)}`);
 
         const result = preProcessAssContent(content, {
             fontFamily,
@@ -311,10 +328,11 @@ export default class ASSRenderer {
             shadowThickness,
             dialoguePositionOverride,
             bottomOffset,
+            ...positionOptions,
             videoHeight: this._videoHeight
         });
 
-        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
+        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); coalesced ${result.coalescedSignRuns || 0} dense sign run(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
         return result.content;
     }
 

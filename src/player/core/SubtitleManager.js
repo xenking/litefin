@@ -457,7 +457,11 @@ export default class SubtitleManager {
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
             const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
-            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
+            const positionOptions = {
+                verticalPosition: PlayerSettings.get('subtitleVerticalPosition'),
+                verticalPositionCustom: PlayerSettings.get('subtitleVerticalPositionCustom')
+            };
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride, positionOptions);
         }
     }
 
@@ -681,7 +685,11 @@ export default class SubtitleManager {
             const letterSpacing = PlayerSettings.get('subtitleLetterSpacing');
             const bottomOffset = PlayerSettings.get('subtitleBottomOffset');
             const dialoguePositionOverride = PlayerSettings.get('subtitleAssDialoguePositionOverride') === true;
-            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride);
+            const positionOptions = {
+                verticalPosition: PlayerSettings.get('subtitleVerticalPosition'),
+                verticalPositionCustom: PlayerSettings.get('subtitleVerticalPositionCustom')
+            };
+            await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride, positionOptions);
 
             this._assRenderer.show();
 

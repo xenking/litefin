@@ -92,7 +92,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 label: i18n.t('VerticalPosition'),
                 labelKey: 'VerticalPosition',
                 key: 'subtitleVerticalPosition',
-                visible: !isASS,
+                visible: !isASS || dialoguePositionOverride,
                 options: [
                     { value: '-1', label: i18n.t('BottomLow') },
                     { value: '-2', label: i18n.t('BottomStandard') },
@@ -109,7 +109,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'AbsolutePosition',
                 key: 'subtitleVerticalPositionCustom',
                 min: 0, max: 100, step: 1, unit: '%',
-                visible: !isASS && verticalPos === 'custom'
+                visible: (!isASS || dialoguePositionOverride) && verticalPos === 'custom'
             },
 
             // Appearance
@@ -328,7 +328,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 label: i18n.t('VerticalPositionAss'),
                 labelKey: 'VerticalPositionAss',
                 key: 'subtitleBottomOffset',
-                min: -100, max: 750, step: 5, unit: 'px',
+                min: -100, max: 1600, step: 5, unit: 'px',
                 visible: isASS && dialoguePositionOverride
             },
             {
