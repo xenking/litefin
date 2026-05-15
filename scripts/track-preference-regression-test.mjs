@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+
+import assert from 'node:assert/strict';
+import { fingerprintStream, findMatchingStream } from '../src/utils/TrackFingerprint.js';
+
+const backingStore = new Map();
+globalThis.window = globalThis.window || {};
+globalThis.localStorage = {
+    get length() { return backingStore.size; },
+    key(index) { return Array.from(backingStore.keys())[index] ?? null; },
+    getItem(key) { return backingStore.has(key) ? backingStore.get(key) : null; },
+    setItem(key, value) { backingStore.set(key, String(value)); },
+    removeItem(key) { backingStore.delete(key); }
+};
+
+{
+    const picked = {
+        Type: 'Audio',
+        Index: 2,
+        Language: 'eng',
+        Codec: 'aac',
+        Channels: 2,
+        ChannelLayout: 'stereo',
+        IsDefault: false,
+        IsForced: false
+    };
+
+    const nextEpisodeStreams = [
+        {
+            Type: 'Audio',
+            Index: 1,
+            Language: 'eng',
+            Codec: 'aac',
+            Channels: 2,
+            ChannelLayout: 'stereo',
+            IsDefault: true,
+            IsForced: false
+        },
+        {
+            Type: 'Audio',
+            Index: 2,
+            Language: 'eng',
+            Codec: 'aac',
+            Channels: 2,
+            ChannelLayout: 'stereo',
+            IsDefault: false,
+            IsForced: false
+        }
+    ];
+
+    const match = findMatchingStream(nextEpisodeStreams, 'Audio', fingerprintStream(picked));
+
+    assert.equal(
+        match?.Index,
+        2,
+        'season audio memory should preserve non-default audio when language/codec/channels are otherwise identical'
+    );
+}
+
+{
+    const { saveSeasonPref, loadSeasonPref } = await import('../src/utils/SeasonTrackPrefStore.js');
+
+    const serverUrl = 'https://jellyfin.example';
+    const userId = 'user-a';
+    const seasonId = 'friends-season-1';
+    const pickedAudio = fingerprintStream({
+        Type: 'Audio',
+        Index: 2,
+        Language: 'eng',
+        Codec: 'aac',
+        Channels: 2,
+        ChannelLayout: 'stereo',
+        IsDefault: false,
+        IsForced: false
+    });
+    const pickedSubtitle = fingerprintStream({
+        Type: 'Subtitle',
+        Index: 5,
+        Language: 'eng',
+        Codec: 'subrip',
+        Title: 'English',
+        IsDefault: false,
+        IsForced: false
+    });
+
+    saveSeasonPref(serverUrl, userId, seasonId, { audio: pickedAudio });
+    saveSeasonPref(serverUrl, userId, seasonId, { subtitle: pickedSubtitle });
+
+    const loaded = loadSeasonPref(serverUrl, userId, seasonId);
+
+    assert.equal(loaded.audio.language, 'eng', 'saved season audio fingerprint should load');
+    assert.equal(loaded.audio.isDefault, false, 'saved season audio should preserve non-default flag');
+    assert.equal(loaded.subtitle.codec, 'subrip', 'saved season subtitle fingerprint should merge without erasing audio');
+}
+
+{
+    const { resolveAudioOutputIndex } = await import('../src/player/core/AudioTrackMapper.js');
+    const mediaSource = {
+        MediaStreams: [
+            { Type: 'Video', Index: 0 },
+            { Type: 'Audio', Index: 1, Language: 'eng' },
+            { Type: 'Audio', Index: 2, Language: 'eng' }
+        ]
+    };
+
+    assert.equal(
+        resolveAudioOutputIndex({
+            audioStreamIndex: 2,
+            mediaSource,
+            outputTrackCount: 2,
+            playMethod: 'DirectPlay',
+            isHls: true
+        }),
+        1,
+        'initial HTML/HLS audio selection should map Jellyfin stream index to audio-track list index'
+    );
+
+    assert.equal(
+        resolveAudioOutputIndex({
+            audioStreamIndex: 2,
+            mediaSource,
+            outputTrackCount: 1,
+            playMethod: 'DirectStream',
+            isHls: true
+        }),
+        0,
+        'server-selected HLS audio should keep the only output track enabled'
+    );
+}
+
+console.log('OK: track preference regressions passed');

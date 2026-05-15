@@ -10,6 +10,7 @@
 import Hls from 'hls.js';
 import Screenfull from 'screenfull';
 import { MediaHelper } from './MediaHelper.js';
+import { resolveAudioOutputIndex } from './AudioTrackMapper.js';
 import { logger } from '../../utils/Logger.js';
 import { PlayerSettings } from '../../utils/PlayerSettings.js';
 
@@ -256,8 +257,14 @@ export class HtmlVideoPlayer {
                 log.info('HLS manifest parsed');
 
                 if (options.audioStreamIndex !== undefined && options.audioStreamIndex >= 0) {
-                    const outputIndex = hls.audioTracks.length <= 1 ? 0 : options.audioStreamIndex;
-                    if (outputIndex < hls.audioTracks.length) {
+                    const outputIndex = resolveAudioOutputIndex({
+                        audioStreamIndex: options.audioStreamIndex,
+                        mediaSource: options.mediaSource,
+                        outputTrackCount: hls.audioTracks.length,
+                        playMethod: options.playMethod,
+                        isHls: true
+                    });
+                    if (outputIndex !== null && outputIndex < hls.audioTracks.length) {
                         hls.audioTrack = outputIndex;
                         log.debug('Set HLS audio track:', options.audioStreamIndex, 'mapped to', outputIndex);
                     }
@@ -430,7 +437,16 @@ export class HtmlVideoPlayer {
                 video.removeEventListener('loadedmetadata', onLoadedMetadata);
                 // Apply initially requested tracks once native tracks are populated
                 if (options.audioStreamIndex !== undefined && options.audioStreamIndex !== null) {
-                    this.setAudioStreamIndex(options.audioStreamIndex);
+                    const outputIndex = resolveAudioOutputIndex({
+                        audioStreamIndex: options.audioStreamIndex,
+                        mediaSource: options.mediaSource,
+                        outputTrackCount: video.audioTracks?.length || 0,
+                        playMethod: options.playMethod,
+                        isHls: false
+                    });
+                    if (outputIndex !== null) {
+                        this.setAudioStreamIndex(outputIndex);
+                    }
                 }
                 if (options.subtitleStreamIndex !== undefined && options.subtitleStreamIndex !== null) {
                     this.setSubtitleStreamIndex(options.subtitleStreamIndex);

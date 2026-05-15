@@ -12,6 +12,7 @@
  *   Codec match      +3
  *   Channel count    +2   (audio only)
  *   ChannelLayout    +1   (audio only)
+ *   Default flag     +0.75 (tie-breaker for main-vs-commentary audio)
  *   Forced flag      +0.5
  *
  * Require score ≥ 5 to accept (language alone is enough).
@@ -67,6 +68,7 @@ export function findMatchingStream(streams, type, fp) {
             if (fp.channels && sChannels && sChannels === fp.channels) score += 2;
             if (fp.channelLayout && sLayout && sLayout === fp.channelLayout) score += 1;
         }
+        if (fp.isDefault === !!s.IsDefault) score += 0.75;
         if (fp.isForced === !!s.IsForced) score += 0.5;
 
         if (score > bestScore) {
