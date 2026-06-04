@@ -45,3 +45,6 @@ knowledge.md
 /.agents
 GEMINI.md
 *.ipk
+
+# local graphify cache
+.graphify/

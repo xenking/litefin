@@ -1980,7 +1980,7 @@ class SettingsPage extends Page {
                                 /* Always snap to seekbar on every OSD reveal */
                                 { value: 'seekbar', label: i18n.t('OsdFocusSeekbar') || 'Always return to Seekbar' }
                             ],
-                            PlayerSettings.get('osdFocusRestoreMode') || 'always'
+                            PlayerSettings.get('osdFocusRestoreMode') || 'timeout'
                         )}
                     </div>
                 </div>

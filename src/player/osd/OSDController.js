@@ -1105,7 +1105,7 @@ export default class OSDController extends Component {
             return;
         }
 
-        const mode = PlayerSettings.get('osdFocusRestoreMode') || 'always';
+        const mode = PlayerSettings.get('osdFocusRestoreMode') || 'timeout';
 
         if (mode === 'always') {
             // Park immediately — next OK press ghost-click hits Play/Pause

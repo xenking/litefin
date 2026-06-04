@@ -366,11 +366,12 @@ const DEFAULTS = {
      *
      *   'remember' — Stay on the last button the user was on (legacy behaviour).
      *   'timeout'  — If the OSD was hidden for ≥ 10 seconds, jump to Play/Pause;
-     *                otherwise stay on the last button.
+     *                otherwise stay on the last button. Default: avoids losing
+     *                seekbar focus right after a rewind/fast-forward.
      *   'always'   — Always land on Play/Pause whenever the OSD re-appears,
      *                no matter how short the hide was.
      */
-    osdFocusRestoreMode: 'always',
+    osdFocusRestoreMode: 'timeout',
 
     // Keep focus on subtitle offset menu (prevent auto-hide)
     keepFocusOnSubtitleOffset: true,

@@ -31,7 +31,8 @@ export function preProcessAssContent(content, options = {}) {
         videoHeight = 1080
     } = options;
 
-    const coalesced = coalesceDenseAnimatedTextSigns(content.split(/\r?\n/));
+    const normalizedLines = ensureValidPlayRes(content.split(/\r?\n/));
+    const coalesced = coalesceDenseAnimatedTextSigns(normalizedLines);
     const lines = coalesced.lines;
     const metadata = collectAssMetadata(lines);
     const shouldOverrideOutline = outlineThickness !== null && outlineThickness !== undefined;
@@ -47,6 +48,7 @@ export function preProcessAssContent(content, options = {}) {
         : null;
 
     let styleFormat = null;
+    let eventFormat = null;
     let stylesOverridden = 0;
     let section = '';
 
@@ -63,6 +65,11 @@ export function preProcessAssContent(content, options = {}) {
             return line;
         }
 
+        if (section === 'events' && trimmed.startsWith('Format:')) {
+            eventFormat = parseFormatLine(trimmed);
+            return line;
+        }
+
         if (isStylesSection(section) && trimmed.startsWith('Style:') && styleFormat) {
             const parts = splitAssFields(line.substring(line.indexOf(':') + 1), styleFormat.length);
             const changed = applyStyleOverrides(parts, styleFormat, {
@@ -73,6 +80,7 @@ export function preProcessAssContent(content, options = {}) {
                 shouldOverrideOutline,
                 shouldOverrideShadow,
                 dialogueStyles: metadata.dialogueStyles,
+                normalizedDialogueFontSize: metadata.normalizedDialogueFontSize,
                 dialoguePlacement
             });
 
@@ -84,10 +92,13 @@ export function preProcessAssContent(content, options = {}) {
         }
 
         if (trimmed.startsWith('Dialogue:')) {
+            const dialogue = parseDialogueLine(line, eventFormat);
+            const isMainDialogue = dialogue && isMainDialogueCandidate(dialogue, metadata.styles.get(dialogue.style));
             return stripInlineOverrides(line, {
                 fontFamily,
-                shouldOverrideOutline,
-                shouldOverrideShadow
+                shouldOverrideOutline: shouldOverrideOutline && (!dialoguePlacement || isMainDialogue),
+                shouldOverrideShadow: shouldOverrideShadow && (!dialoguePlacement || isMainDialogue),
+                shouldNormalizeFontSize: !!dialoguePlacement && isMainDialogue
             });
         }
 
@@ -100,6 +111,45 @@ export function preProcessAssContent(content, options = {}) {
         dialogueStyles: metadata.dialogueStyles,
         coalescedSignRuns: coalesced.runs
     };
+}
+
+function ensureValidPlayRes(lines) {
+    const nextLines = [...lines];
+
+    const getPlayRes = (key) => {
+        const line = nextLines.find(l => new RegExp(`^${key}\\s*:`, 'i').test(l.trim()));
+        if (!line) return -1;
+        const value = parseInt(line.substring(line.indexOf(':') + 1).trim(), 10);
+        return Number.isFinite(value) ? value : 0;
+    };
+
+    const resX = getPlayRes('PlayResX');
+    const resY = getPlayRes('PlayResY');
+
+    if (resX > 0 && resY > 0) {
+        return nextLines;
+    }
+
+    // ASS spec defaults. Using video-sized defaults makes fonts authored for
+    // classic ASS canvases render too small after libjass scaling.
+    const defaults = {
+        PlayResX: 384,
+        PlayResY: 288
+    };
+
+    const scriptInfoIdx = nextLines.findIndex(l => /^\[Script Info\]/i.test(l.trim()));
+    const insertAt = scriptInfoIdx !== -1 ? scriptInfoIdx + 1 : 0;
+
+    for (const [key, value] of Object.entries(defaults)) {
+        const idx = nextLines.findIndex(l => new RegExp(`^${key}\\s*:`, 'i').test(l.trim()));
+        if (idx !== -1) {
+            nextLines[idx] = `${key}: ${value}`;
+        } else {
+            nextLines.splice(insertAt, 0, `${key}: ${value}`);
+        }
+    }
+
+    return nextLines;
 }
 
 function coalesceDenseAnimatedTextSigns(lines) {
@@ -224,7 +274,8 @@ function collectAssMetadata(lines) {
                 if (name) {
                     styles.set(name, {
                         name,
-                        alignment: parseInt(getField(parts, styleFormat, 'Alignment'), 10)
+                        alignment: parseInt(getField(parts, styleFormat, 'Alignment'), 10),
+                        fontSize: parseFloat(getField(parts, styleFormat, 'Fontsize'))
                     });
                 }
             }
@@ -243,7 +294,13 @@ function collectAssMetadata(lines) {
         }
     }
 
-    return { playResY, styles, dialogueStyles };
+    const dialogueFontSizes = Array.from(dialogueStyles)
+        .map(name => styles.get(name)?.fontSize)
+        .filter(size => Number.isFinite(size) && size > 0)
+        .sort((a, b) => a - b);
+    const normalizedDialogueFontSize = median(dialogueFontSizes);
+
+    return { playResY, styles, dialogueStyles, normalizedDialogueFontSize };
 }
 
 function applyStyleOverrides(parts, styleFormat, options) {
@@ -255,12 +312,14 @@ function applyStyleOverrides(parts, styleFormat, options) {
         shouldOverrideOutline,
         shouldOverrideShadow,
         dialogueStyles,
+        normalizedDialogueFontSize,
         dialoguePlacement
     } = options;
 
     let changed = false;
 
     const name = getField(parts, styleFormat, 'Name');
+    const isDialogueStyle = dialogueStyles.has(name);
 
     const fontIdx = findFieldIndex(styleFormat, 'Fontname');
     if (fontIdx !== -1 && fontFamily) {
@@ -269,10 +328,13 @@ function applyStyleOverrides(parts, styleFormat, options) {
     }
 
     const sizeIdx = findFieldIndex(styleFormat, 'Fontsize');
-    if (sizeIdx !== -1 && fontFamily && fontScale !== 1.0) {
+    if (sizeIdx !== -1) {
         const originalSize = parseFloat(parts[sizeIdx]);
-        if (!isNaN(originalSize)) {
-            parts[sizeIdx] = (originalSize * fontScale).toFixed(2);
+        const shouldNormalizeSize = dialoguePlacement && isDialogueStyle && Number.isFinite(normalizedDialogueFontSize);
+        const shouldScaleSize = fontFamily && fontScale !== 1.0;
+        if ((shouldNormalizeSize || Number.isFinite(originalSize)) && (shouldNormalizeSize || shouldScaleSize)) {
+            const baseSize = shouldNormalizeSize ? normalizedDialogueFontSize : originalSize;
+            parts[sizeIdx] = formatAssNumber(baseSize * fontScale);
             changed = true;
         }
     }
@@ -290,7 +352,7 @@ function applyStyleOverrides(parts, styleFormat, options) {
     }
 
     const alignmentIdx = findFieldIndex(styleFormat, 'Alignment');
-    if (dialoguePlacement && dialoguePlacement.anchor === 'top' && alignmentIdx !== -1 && dialogueStyles.has(name)) {
+    if (dialoguePlacement && dialoguePlacement.anchor === 'top' && alignmentIdx !== -1 && isDialogueStyle) {
         const topAlignment = toTopAlignment(parts[alignmentIdx]);
         if (topAlignment !== parts[alignmentIdx]) {
             parts[alignmentIdx] = topAlignment;
@@ -299,7 +361,7 @@ function applyStyleOverrides(parts, styleFormat, options) {
     }
 
     const marginVIdx = findFieldIndex(styleFormat, 'MarginV');
-    if (dialoguePlacement && marginVIdx !== -1 && dialogueStyles.has(name)) {
+    if (dialoguePlacement && marginVIdx !== -1 && isDialogueStyle) {
         parts[marginVIdx] = dialoguePlacement.marginV;
         changed = true;
     }
@@ -308,11 +370,15 @@ function applyStyleOverrides(parts, styleFormat, options) {
 }
 
 function stripInlineOverrides(line, options) {
-    const { fontFamily, shouldOverrideOutline, shouldOverrideShadow } = options;
+    const { fontFamily, shouldOverrideOutline, shouldOverrideShadow, shouldNormalizeFontSize } = options;
 
-    return line.replace(/\\(fn|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, (match, tag) => {
+    return line.replace(/\\(fn|fs(?![a-zA-Z])|bord|shad|s?out|s?shad)[^\\})]+(?=[\\})])/g, (match, tag) => {
         if (tag === 'fn') {
             return fontFamily ? '' : match;
+        }
+
+        if (tag === 'fs') {
+            return shouldNormalizeFontSize ? '' : match;
         }
 
         if (tag.includes('out') || tag.includes('bord')) {
@@ -475,6 +541,19 @@ function toTopAlignment(alignment) {
 function clamp(value, min, max, fallback) {
     if (!Number.isFinite(value)) return fallback;
     return Math.max(min, Math.min(max, value));
+}
+
+function median(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+        return null;
+    }
+
+    const middle = Math.floor(values.length / 2);
+    if (values.length % 2 === 1) {
+        return values[middle];
+    }
+
+    return (values[middle - 1] + values[middle]) / 2;
 }
 
 function formatAssNumber(value) {

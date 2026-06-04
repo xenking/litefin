@@ -52,6 +52,36 @@ Dialogue: 0,0:02:40.09,0:02:40.13,Window Sign,,0000,0000,0000,,{\\pos(474.23,234
 Dialogue: 0,0:02:40.13,0:02:40.18,Window Sign,,0000,0000,0000,,{\\pos(474.62,234.45)\\fscx50.5}Летние курсы\\NЙойоги
 `;
 
+const mixedDialogueSizeAss = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: MainSmall,Arial,36,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+Style: MainLarge,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+Style: Screen Sign,Arial,80,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,MainSmall,,0000,0000,0000,,{\\fs24}маленькая строка
+Dialogue: 0,0:00:04.00,0:00:06.00,MainLarge,,0000,0000,0000,,большая строка
+Dialogue: 0,0:00:07.00,0:00:09.00,Screen Sign,,0000,0000,0000,,{\\pos(100,100)\\fs70}надпись
+`;
+
+const missingPlayResAss = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,hello
+`;
+
 function styleLine(content, name) {
     return content.split(/\r?\n/).find(line => line.startsWith(`Style: ${name},`));
 }
@@ -147,7 +177,7 @@ function dialogueLines(content) {
         fontScale: 1.2
     });
 
-    assert.match(styleLine(result.content, 'Main-Yahari'), /Main-Yahari,Poppins,57\.60/, 'explicit ASS font override should still work');
+    assert.match(styleLine(result.content, 'Main-Yahari'), /Main-Yahari,Poppins,57\.6/, 'explicit ASS font override should still work');
 }
 
 {
@@ -157,6 +187,26 @@ function dialogueLines(content) {
     });
 
     assert.doesNotMatch(dialogueLine(result.content, 'Подготовительные занятия'), /\\bord4\\shad2/, 'inline border/shadow should be stripped only when matching override is on');
+}
+
+{
+    const result = preProcessAssContent(mixedDialogueSizeAss, {
+        dialoguePositionOverride: true,
+        bottomOffset: 300,
+        videoHeight: 1080
+    });
+
+    assert.match(styleLine(result.content, 'MainSmall'), /MainSmall,Arial,48,/, 'position override should normalize small main dialogue font size');
+    assert.match(styleLine(result.content, 'MainLarge'), /MainLarge,Arial,48,/, 'position override should normalize large main dialogue font size');
+    assert.match(styleLine(result.content, 'Screen Sign'), /Screen Sign,Arial,80,/, 'position override should not normalize sign font size');
+    assert.doesNotMatch(dialogueLine(result.content, 'маленькая строка'), /\\fs24/, 'position override should strip inline font size from main dialogue');
+    assert.match(dialogueLine(result.content, 'надпись'), /\\fs70/, 'position override should preserve inline font size on positioned signs');
+}
+
+{
+    const result = preProcessAssContent(missingPlayResAss);
+    assert.match(result.content, /PlayResX: 384/, 'missing PlayResX should be patched for libjass');
+    assert.match(result.content, /PlayResY: 288/, 'missing PlayResY should be patched for libjass');
 }
 
 console.log('OK: subtitle regressions passed');
