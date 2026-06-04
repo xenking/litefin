@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { fingerprintStream, findMatchingStream } from '../src/utils/TrackFingerprint.js';
+import { resolveUserDataTrackIndex } from '../src/utils/TrackPreferenceResolver.js';
 
 const backingStore = new Map();
 globalThis.window = globalThis.window || {};
@@ -125,6 +126,29 @@ globalThis.localStorage = {
         }),
         0,
         'server-selected HLS audio should keep the only output track enabled'
+    );
+}
+
+{
+    const friendsS06E01MediaSource = {
+        MediaStreams: [
+            { Type: 'Video', Index: 0 },
+            { Type: 'Audio', Index: 1, Language: 'rus', Codec: 'ac3', IsDefault: true },
+            { Type: 'Audio', Index: 2, Language: 'eng', Codec: 'dts', Profile: 'DTS-HD MA', IsDefault: false },
+            { Type: 'Subtitle', Index: 3, Language: 'rus', Codec: 'subrip' }
+        ]
+    };
+
+    assert.equal(
+        resolveUserDataTrackIndex(friendsS06E01MediaSource, 'Audio', 2),
+        2,
+        'Jellyfin UserData audio preference should restore the saved non-default DTS-HD MA track'
+    );
+
+    assert.equal(
+        resolveUserDataTrackIndex(friendsS06E01MediaSource, 'Audio', 99),
+        undefined,
+        'stale UserData audio preference should be ignored after media replacement/rescan'
     );
 }
 

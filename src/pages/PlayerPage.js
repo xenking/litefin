@@ -26,6 +26,7 @@ import SubtitleStyles from '../utils/SubtitleStyles.js';
 import FontLoader from '../utils/FontLoader.js';
 import { PlayerSettings } from '../utils/PlayerSettings.js';
 import { fingerprintStream, findMatchingStream } from '../utils/TrackFingerprint.js';
+import { resolveUserDataTrackIndex } from '../utils/TrackPreferenceResolver.js';
 import { loadSeasonPref, saveSeasonPref } from '../utils/SeasonTrackPrefStore.js';
 import { storage } from '../utils/StorageService.js';
 import { logger } from '../utils/Logger.js';
@@ -826,12 +827,30 @@ class PlayerPage extends Page {
             : item.MediaSources?.[0];
 
         // 2. Resolve track choices.
-        // Pre-selected tracks from DetailsPage win first. If there is no explicit
-        // selection, prefer the fork's season-scoped fingerprint, then fall back
-        // to upstream's session-wide language memory, and finally the media-source defaults.
+        // Pre-selected tracks from DetailsPage win first. Then use Jellyfin's
+        // per-item UserData (saved by our progress reports and other clients).
+        // If that is missing/stale, prefer the fork's season-scoped fingerprint,
+        // then upstream's session-wide language memory, and finally defaults.
         const seasonPref = this._resolveSeasonTrackPref(item, mediaSource);
+        const userDataAudioIndex = resolveUserDataTrackIndex(
+            mediaSource,
+            'Audio',
+            item.UserData?.AudioStreamIndex
+        );
+        const userDataSubtitleIndex = resolveUserDataTrackIndex(
+            mediaSource,
+            'Subtitle',
+            item.UserData?.SubtitleStreamIndex
+        );
         let savedAudioIndex = preSelectedAudio !== null && preSelectedAudio !== undefined ? preSelectedAudio : undefined;
         let savedSubtitleIndex = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined ? preSelectedSubtitle : undefined;
+
+        if (savedAudioIndex === undefined && userDataAudioIndex !== undefined) {
+            savedAudioIndex = userDataAudioIndex;
+        }
+        if (savedSubtitleIndex === undefined && userDataSubtitleIndex !== undefined) {
+            savedSubtitleIndex = userDataSubtitleIndex;
+        }
 
         if (savedAudioIndex === undefined && seasonPref.audio !== null) {
             savedAudioIndex = seasonPref.audio;
@@ -895,6 +914,8 @@ class PlayerPage extends Page {
             subtitle: savedSubtitleIndex,
             preSelectedAudio,
             preSelectedSubtitle,
+            userDataAudioIndex,
+            userDataSubtitleIndex,
             seasonPrefApplied: seasonPref.applied
         });
 
@@ -1921,6 +1942,12 @@ class PlayerPage extends Page {
     _onMediaStreamsChange(data) {
         if (!this._item || !this._player) return;
 
+        // Capture explicit user track picks immediately. The progress report
+        // below is intentionally throttled during startup, but track memory
+        // must not be throttled: users often switch audio/subtitles in the
+        // first seconds of playback and expect the choice to stick.
+        this._captureSeasonTrackPref(data);
+
         // Skip reporting during initial setup (first 2 seconds of play time) to avoid CPU contention.
         // Tizen hardware is under heavy load during ABR jumps at startup, and building the
         // full NowPlayingQueue for progress reporting can trigger stutters.
@@ -1937,11 +1964,6 @@ class PlayerPage extends Page {
         log.info('Media streams changed, reporting progress to persist selection');
         const isPaused = this._player.isPaused();
         this._reportPlaybackProgress(isPaused ? 'pause' : 'timeupdate');
-
-        // Capture current selection as season-scoped preference so it can be
-        // re-applied to the next episode. Only runs on Episodes with both
-        // SeriesId and SeasonId — other item types don't have a "season" concept.
-        this._captureSeasonTrackPref(data);
     }
 
     /**
@@ -2551,6 +2573,11 @@ class PlayerPage extends Page {
             // Capture session info BEFORE stopping (stop clears internal state)
             const mediaSource = this._player?.getCurrentMediaSource?.();
             const positionTicks = this._player?.getCurrentPositionTicks?.() || 0;
+
+            // Persist session-wide language/title memory before stop() clears
+            // the player internals. Season-scoped memory is captured at the
+            // moment a track is changed; this covers exit/back without next/prev.
+            this._captureActiveTrackSelection();
 
             // Notify plugins that playback is ending — they clean up OSD widgets
             pluginManager.notifyPlayerStop();
