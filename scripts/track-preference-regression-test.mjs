@@ -131,6 +131,11 @@ globalThis.localStorage = {
 
 {
     const friendsS06E01MediaSource = {
+        Id: 'friends-s06e01',
+        Container: 'mkv',
+        SupportsDirectPlay: true,
+        SupportsDirectStream: true,
+        DefaultAudioStreamIndex: 1,
         MediaStreams: [
             { Type: 'Video', Index: 0 },
             { Type: 'Audio', Index: 1, Language: 'rus', Codec: 'ac3', IsDefault: true },
@@ -149,6 +154,86 @@ globalThis.localStorage = {
         resolveUserDataTrackIndex(friendsS06E01MediaSource, 'Audio', 99),
         undefined,
         'stale UserData audio preference should be ignored after media replacement/rescan'
+    );
+
+    const { MediaHelper } = await import('../src/player/core/MediaHelper.js');
+    const streamInfo = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'friends-s06e01',
+        mediaSource: friendsS06E01MediaSource,
+        authToken: 'token',
+        audioStreamIndex: 2
+    });
+
+    assert.match(
+        streamInfo.url,
+        /Static=false/,
+        'explicit non-default audio fallback must not use raw Static=true MKV'
+    );
+
+    const streamInfoWithoutDefault = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'friends-s06e01',
+        mediaSource: {
+            Id: 'friends-s06e01',
+            Container: 'mkv',
+            SupportsDirectPlay: true,
+            SupportsDirectStream: true
+        },
+        authToken: 'token',
+        audioStreamIndex: 2
+    });
+
+    assert.match(
+        streamInfoWithoutDefault.url,
+        /Static=false/,
+        'explicit audio selection with unknown default must not use raw Static=true MKV'
+    );
+
+    const streamInfoWithRewrittenDefault = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'friends-s06e01',
+        mediaSource: {
+            Id: 'friends-s06e01',
+            Container: 'mkv',
+            SupportsDirectPlay: true,
+            SupportsDirectStream: true,
+            DefaultAudioStreamIndex: 2
+        },
+        authToken: 'token',
+        audioStreamIndex: 2,
+        forceServerSelectedAudio: true
+    });
+
+    assert.match(
+        streamInfoWithRewrittenDefault.url,
+        /Static=false/,
+        'forced server-selected audio must survive PlaybackInfo default rewrite'
+    );
+
+    const streamInfoWithSelectedSingleReturnedAudio = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'friends-s06e01',
+        mediaSource: {
+            Id: 'friends-s06e01',
+            Container: 'mkv',
+            SupportsDirectPlay: true,
+            SupportsDirectStream: true,
+            DefaultAudioStreamIndex: 2,
+            MediaStreams: [
+                { Type: 'Video', Index: 0 },
+                { Type: 'Audio', Index: 2, Language: 'eng', Codec: 'dts', Profile: 'DTS-HD MA', IsDefault: true }
+            ]
+        },
+        authToken: 'token',
+        audioStreamIndex: 2,
+        forceServerSelectedAudio: true
+    });
+
+    assert.match(
+        streamInfoWithSelectedSingleReturnedAudio.url,
+        /Static=false/,
+        'caller force must override single-audio PlaybackInfo result after default rewrite'
     );
 }
 

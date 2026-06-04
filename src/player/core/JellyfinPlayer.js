@@ -533,6 +533,8 @@ export class JellyfinPlayer extends EventEmitter {
             
             let isCustomAudioTrack = false;
             let isFirstAudioTrack = true;
+            let selectedOriginalAudioCodec = '';
+            let originalAudioStreamCount = 0;
             if (options.audioStreamIndex !== undefined && options.audioStreamIndex !== null) {
                 // Determine the default and first tracks from the pre-fetched item if available
                 let defaultIndex = undefined;
@@ -544,9 +546,12 @@ export class JellyfinPlayer extends EventEmitter {
                     if (ms) {
                         defaultIndex = ms.DefaultAudioStreamIndex;
                         const audioStreams = (ms.MediaStreams || []).filter(s => s.Type === 'Audio');
+                        originalAudioStreamCount = audioStreams.length;
                         if (audioStreams.length > 0) {
                             firstAudioIndex = audioStreams[0].Index;
                         }
+                        const selectedOriginalAudio = audioStreams.find(s => Number(s.Index) === Number(options.audioStreamIndex));
+                        selectedOriginalAudioCodec = (selectedOriginalAudio?.Codec || '').toLowerCase();
                     }
                 }
                 
@@ -555,10 +560,14 @@ export class JellyfinPlayer extends EventEmitter {
                 isCustomAudioTrack = (reqIndex !== Number(defaultIndex));
                 isFirstAudioTrack = (firstAudioIndex !== undefined && reqIndex === Number(firstAudioIndex));
                 
-                log.info(`[AudioSelection] Requested: ${reqIndex}, Default: ${defaultIndex}, First: ${firstAudioIndex}, Custom: ${isCustomAudioTrack}, IsFirst: ${isFirstAudioTrack}`);
+                log.info(`[AudioSelection] Requested: ${reqIndex}, Default: ${defaultIndex}, First: ${firstAudioIndex}, Custom: ${isCustomAudioTrack}, IsFirst: ${isFirstAudioTrack}, Codec: ${selectedOriginalAudioCodec}`);
             }
 
+            const isLosslessOrPassthroughAudio = selectedOriginalAudioCodec.includes('dts') ||
+                selectedOriginalAudioCodec === 'dca' ||
+                selectedOriginalAudioCodec === 'truehd';
             const needsDirectStreamForAudio = options._forceDirectStream ||
+                (originalAudioStreamCount > 1 && isLosslessOrPassthroughAudio) ||
                 (isHtml5Backend && !supportsNativeAudio && (isCustomAudioTrack || !isFirstAudioTrack));
 
             // Determine effective playback mode for profiling
@@ -582,6 +591,9 @@ export class JellyfinPlayer extends EventEmitter {
             // (e.g. user set bitrate limits), still clear DirectPlayProfiles as a safeguard.
             if (needsDirectStreamForAudio) {
                 deviceProfile.DirectPlayProfiles = [];
+                this._forceAudioOnlyRemux = true;
+            } else {
+                this._forceAudioOnlyRemux = false;
             }
 
             // Apply Subtitle Mode logic before fetching PlaybackInfo
@@ -937,6 +949,14 @@ export class JellyfinPlayer extends EventEmitter {
                 this._resumeWaitStartTime = Date.now();
             }
 
+            const originalMediaSource = options.item?.MediaSources?.find((ms) => ms.Id === mediaSource.Id) ||
+                options.item?.MediaSources?.[0] ||
+                mediaSource;
+            const originalAudioStreams = (originalMediaSource?.MediaStreams || []).filter((s) => s.Type === 'Audio');
+            const finalAudioIndex = Number(this._currentAudioStreamIndex);
+            const forceServerSelectedAudio = Boolean(isCustomAudioTrack) ||
+                (Number.isFinite(finalAudioIndex) && originalAudioStreams.length > 1);
+
             // Build stream URL
             const streamInfo = MediaHelper.buildStreamUrl({
                 serverUrl: this.serverUrl,
@@ -949,7 +969,13 @@ export class JellyfinPlayer extends EventEmitter {
                 // Pass audioStreamIndex so it's included in manually-built fallback URLs.
                 // When TranscodingUrl is present (the normal case), the server already
                 // has this baked in and this param is unused.
-                audioStreamIndex: this._currentAudioStreamIndex
+                audioStreamIndex: this._currentAudioStreamIndex,
+                // forceServerSelectedAudio is calculated from the original item
+                // media source before PlaybackInfo can rewrite DefaultAudioStreamIndex
+                // to the requested track. Static=true ignores AudioStreamIndex, so
+                // force the server-selected stream whenever original media has
+                // multiple audio streams and an index was selected.
+                forceServerSelectedAudio
             });
 
             //log.debug('Stream Info built:', streamInfo);
@@ -2003,7 +2029,9 @@ export class JellyfinPlayer extends EventEmitter {
                 // EnableTranscoding must be true for Jellyfin to process a Remux stream
                 requestBody.EnableTranscoding = true;
                 requestBody.AllowVideoStreamCopy = true;
-                requestBody.AllowAudioStreamCopy = true;
+                // For unsupported selected audio (DTS/TrueHD on WebOS), force only
+                // the audio through transcoding while preserving video copy.
+                requestBody.AllowAudioStreamCopy = !this._forceAudioOnlyRemux;
                 
                 // Clear ALL codec limits to prevent "VideoBitDepthNotSupported" etc which block generic remux
                 requestBody.DeviceProfile.CodecProfiles = [];

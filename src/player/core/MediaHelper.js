@@ -28,13 +28,21 @@ export const MediaHelper = {
      * @returns {Object} Stream info with URL and metadata
      */
     buildStreamUrl(options) {
-        const { serverUrl, itemId, mediaSource, startPositionTicks, playSessionId, authToken, audioStreamIndex } = options;
+        const { serverUrl, itemId, mediaSource, startPositionTicks, playSessionId, authToken, audioStreamIndex, forceServerSelectedAudio } = options;
 
         // Determine play method
         const playMethod = this.getPlayMethod(mediaSource);
 
         let url;
         let isHls = false;
+        const audioStreams = mediaSource?.MediaStreams?.filter((s) => String(s.Type).toLowerCase() === 'audio') || [];
+        const selectedAudioIndex = audioStreamIndex !== undefined && audioStreamIndex !== null
+            ? Number(audioStreamIndex)
+            : undefined;
+        const hasAudioStreamSelection = Number.isFinite(selectedAudioIndex);
+        const mayContainMultipleAudioStreams = audioStreams.length !== 1;
+        const needsServerSelectedAudioStream = Boolean(forceServerSelectedAudio) ||
+            (hasAudioStreamSelection && mayContainMultipleAudioStreams);
 
         if (playMethod === 'DirectPlay' || playMethod === 'DirectStream') {
             // ================================================================
@@ -144,9 +152,16 @@ export const MediaHelper = {
                 isHls = url.includes('.m3u8');
 
             } else if (mediaSource.SupportsDirectStream) {
-                // Static-serve the container file as-is
+                // Static=true serves the original container as-is. Jellyfin does
+                // NOT strip/select audio tracks for this path; AudioStreamIndex is
+                // only metadata on the URL. Therefore Static=true is only safe
+                // when there is no explicit audio selection, or the server proved the
+                // selected stream is the only audio stream in the delivered source.
+                // Multi-audio and unknown-audio sources must not use Static=true;
+                // if PlaybackInfo did not provide a TranscodingUrl, Static=false is
+                // the last fallback because at least it applies AudioStreamIndex.
                 url = `${serverUrl}/Videos/${itemId}/stream.${mediaSource.Container}`;
-                url += `?Static=true`;
+                url += needsServerSelectedAudioStream ? `?Static=false` : `?Static=true`;
                 url += `&mediaSourceId=${encodeURIComponent(mediaSource.Id)}`;
                 url += `&api_key=${encodeURIComponent(authToken)}`;
                 if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
