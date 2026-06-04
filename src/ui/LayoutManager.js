@@ -34,8 +34,10 @@ const THEME_MODES = {
     CLASSIC_DARK: 'classic-dark',
     CLASSIC_LIGHT: 'classic-light',
     BLACK: 'black',
-    TINTED: 'tinted'
+    TINTED: 'tinted',
+    AMBIENT: 'ambient'
 };
+
 
 // Default Theme Color (Lavender)
 const DEFAULT_THEME_COLOR = '#af52de';
@@ -69,6 +71,21 @@ class LayoutManager {
         // OSD button borders mode: 'auto', 'light', 'dark', 'hidden'
         this._osdButtonBorders = 'auto';
 
+        // Low VRAM Mode: Disables GPU transitions/animations for legacy hardware
+        this._lowVramMode = false;
+
+        // Disable Card Scaling: Specifically prevents posters/thumbs from scaling on focus
+        this._disableCardScaling = false;
+
+        // Simple Loader: Lightweight rotating ring instead of pulsing dots
+        this._simpleLoader = false;
+
+        // Disable BlurHash: Disables color-accurate blurred canvas rendering during image load
+        this._disableBlurhash = false;
+
+        // Only BlurHash Backdrop: Uses only decoded blurhash for details backdrop background without loading image
+        this._onlyBlurHashBackdrop = false;
+
         // Internal style element for dynamic variables
         this._dynamicStyleEl = null;
     }
@@ -95,6 +112,11 @@ class LayoutManager {
         const savedRoundedCorners = storage.getItem('litefin:roundedCorners') !== 'false';
         const savedTextScale = parseFloat(storage.getItem('litefin:textScale') || '1.0');
         const savedOsdBorders = storage.getItem('litefin:osdButtonBorders') || 'auto';
+        const savedLowVram = storage.getItem('litefin:lowVramMode') === 'true';
+        const savedDisableScaling = storage.getItem('litefin:disableCardScaling') === 'true';
+        const savedSimpleLoader = storage.getItem('litefin:simpleLoader') === 'true';
+        const savedDisableBlurhash = storage.getItem('litefin:disableBlurhash') === 'true';
+        const savedOnlyBlurHashBackdrop = storage.getItem('litefin:onlyBlurHashBackdrop') === 'true';
 
         this.setLayout(savedLayout, false);
         this.setThemeMode(initialMode, false);
@@ -103,6 +125,11 @@ class LayoutManager {
         this.setRoundedCorners(savedRoundedCorners, false);
         this.setTextScale(savedTextScale, false);
         this.setOsdButtonBorders(savedOsdBorders, false);
+        this.setLowVramMode(savedLowVram, false);
+        this.setDisableCardScaling(savedDisableScaling, false);
+        this.setSimpleLoader(savedSimpleLoader, false);
+        this.setDisableBlurhash(savedDisableBlurhash, false);
+        this.setOnlyBlurHashBackdrop(savedOnlyBlurHashBackdrop, false);
 
         // Stamp the tier and platform for CSS targeting
         document.documentElement.setAttribute('data-layout-tier', platformInfo.layoutTier);
@@ -136,6 +163,13 @@ class LayoutManager {
             log.info(`Layout changed from "${oldLayout}" to "${layout}"`);
             eventBus.emit('layout:changed', { layout, previousLayout: oldLayout });
         }
+    }
+
+    /**
+     * Get the current layout
+     */
+    getLayout() {
+        return this._layout;
     }
 
     /**
@@ -205,6 +239,13 @@ class LayoutManager {
         const contrastColor = themeUtils.getContrastColor(this._themeColor);
         const contrastRgb = themeUtils.hexToRgb(contrastColor);
         const contrastRgbStr = contrastRgb ? `${contrastRgb.r}, ${contrastRgb.g}, ${contrastRgb.b}` : '255, 255, 255';
+
+        // Focus Indicator Logic:
+        // If the accent color is "bright" (Luminance > 0.4), the calculated contrast color 
+        // (normally for text) is very dark. Since most themes are dark, a dark focus border 
+        // would be invisible. We use a soft light variant for focus borders in these cases.
+        const isBrightAccent = themeUtils.isBright(this._themeColor);
+        const focusBorderColor = isBrightAccent ? themeUtils.getSoftLight(this._themeColor) : contrastColor;
         
         // Remove any inline flash-prevention variables injected by index.html
         // so that our dynamic stylesheet (which has lower specificity than inline style)
@@ -229,8 +270,8 @@ class LayoutManager {
             --jf-primary-btn-color: ${contrastColor};
             --jf-primary-btn-color-rgb: ${contrastRgbStr};
             --jf-switch-handle: ${contrastColor};
-            --jf-action-btn-active-border: ${contrastColor};
-            --jf-button-border-focus: ${contrastColor};
+            --jf-action-btn-active-border: ${focusBorderColor};
+            --jf-button-border-focus: ${focusBorderColor};
             --jf-focus-border-color: ${accents.accent};`;
 
         // 1.5. Set Text Colors (Ensures ultra-legacy build always has stable text vars)
@@ -254,7 +295,7 @@ class LayoutManager {
             --text-muted: var(--jf-text-secondary);`;
         }
 
-        // 2. Clear or apply tinted background variables
+        // 2. Apply background variables based on theme mode
         if (this._themeMode === THEME_MODES.TINTED) {
             const tints = themeUtils.getTintedColors(this._themeColor);
             dynamicCss += `
@@ -265,6 +306,37 @@ class LayoutManager {
             --jf-card-bg-hover: ${tints.cardBgHover};
             --jf-divider: ${tints.divider};
             --jf-navbar-bg: ${tints.background};`;
+        } else if (this._themeMode === THEME_MODES.AMBIENT) {
+            // Elegant, matte ultra-dark background matching Apple's Human Interface Guidelines.
+            // A deeply saturated charcoal canvas serves as the foundation.
+            // Translucent material cards absorb the dynamically-cast ambient gradients.
+            dynamicCss += `
+            --jf-background: #0a0b0c;
+            --jf-background-alt: #070809;
+            --jf-surface: rgba(255, 255, 255, 0.035);
+            --jf-card-bg: rgba(255, 255, 255, 0.045);
+            --jf-card-bg-hover: rgba(255, 255, 255, 0.1);
+            --jf-divider: rgba(255, 255, 255, 0.06);
+            --jf-navbar-bg: rgba(7, 8, 9, 0.85);`;
+        } else if (this._themeMode === THEME_MODES.BLACK) {
+
+            dynamicCss += `
+            --jf-background: #000000;
+            --jf-background-alt: #000000;
+            --jf-surface: #0a0a0a;
+            --jf-card-bg: #080808;
+            --jf-card-bg-hover: #121212;
+            --jf-divider: rgba(255, 255, 255, 0.05);
+            --jf-navbar-bg: #000000;`;
+        } else if (this._themeMode === THEME_MODES.CLASSIC_DARK) {
+            dynamicCss += `
+            --jf-background: #101010;
+            --jf-background-alt: #151515;
+            --jf-surface: #1a1a1a;
+            --jf-card-bg: #151515;
+            --jf-card-bg-hover: #252525;
+            --jf-divider: rgba(255, 255, 255, 0.08);
+            --jf-navbar-bg: #151515;`;
         }
 
         dynamicCss += `\n        }`;
@@ -357,6 +429,158 @@ class LayoutManager {
 
         log.info(`OSD button borders updated: ${mode}`);
         eventBus.emit('osdButtonBorders:changed', { mode });
+    }
+
+    /**
+     * Enable or disable Low VRAM Mode
+     * @param {boolean} enabled 
+     * @param {boolean} [save=true] 
+     */
+    setLowVramMode(enabled, save = true) {
+        this._lowVramMode = enabled;
+        
+        if (enabled) {
+            document.documentElement.setAttribute('data-low-vram', 'true');
+        } else {
+            document.documentElement.removeAttribute('data-low-vram');
+        }
+
+        if (save) {
+            storage.setItem('litefin:lowVramMode', enabled ? 'true' : 'false');
+        }
+
+        log.info(`Low VRAM Mode set to: ${enabled}`);
+        eventBus.emit('lowVramMode:changed', { enabled });
+    }
+
+    getLowVramMode() {
+        return this._lowVramMode;
+    }
+
+    /**
+     * Enable or disable Card Scaling
+     * @param {boolean} enabled 
+     * @param {boolean} [save=true] 
+     */
+    setDisableCardScaling(enabled, save = true) {
+        this._disableCardScaling = enabled;
+        
+        if (enabled) {
+            document.documentElement.setAttribute('data-disable-card-scaling', 'true');
+        } else {
+            document.documentElement.removeAttribute('data-disable-card-scaling');
+        }
+
+        if (save) {
+            storage.setItem('litefin:disableCardScaling', enabled ? 'true' : 'false');
+        }
+
+        log.info(`Disable Card Scaling set to: ${enabled}`);
+        eventBus.emit('disableCardScaling:changed', { enabled });
+    }
+
+    getDisableCardScaling() {
+        return this._disableCardScaling;
+    }
+
+    /**
+     * Enable or disable Simple Loader
+     * @param {boolean} enabled 
+     * @param {boolean} [save=true] 
+     */
+    setSimpleLoader(enabled, save = true) {
+        this._simpleLoader = enabled;
+        
+        if (enabled) {
+            document.documentElement.setAttribute('data-simple-loader', 'true');
+        } else {
+            document.documentElement.removeAttribute('data-simple-loader');
+        }
+
+        if (save) {
+            storage.setItem('litefin:simpleLoader', enabled ? 'true' : 'false');
+        }
+
+        log.info(`Simple Loader set to: ${enabled}`);
+        eventBus.emit('simpleLoader:changed', { enabled });
+    }
+
+    getSimpleLoader() {
+        return this._simpleLoader;
+    }
+
+    /**
+     * Disable or enable BlurHash Placeholders
+     * Toggles whether color-accurate blurred canvases are initialized on lazy media cards.
+     * 
+     * @param {boolean} disabled - True to disable canvases; false to enable them.
+     * @param {boolean} [save=true] - Persist the preference locally.
+     * @public
+     */
+    setDisableBlurhash(disabled, save = true) {
+        // Update local property tracking
+        this._disableBlurhash = disabled;
+        
+        // Write the HTML attribute flag so that stylesheets and card rendering can adapt
+        if (disabled) {
+            document.documentElement.setAttribute('data-disable-blurhash', 'true');
+        } else {
+            document.documentElement.removeAttribute('data-disable-blurhash');
+        }
+
+        // Persist setting inside the StorageService database
+        if (save) {
+            storage.setItem('litefin:disableBlurhash', disabled ? 'true' : 'false');
+        }
+
+        // Dispatch status updates to observers and listeners
+        log.info(`Disable BlurHash set to: ${disabled}`);
+        eventBus.emit('disableBlurhash:changed', { disabled });
+    }
+
+    /**
+     * Check if BlurHash placeholders are globally disabled.
+     * Used by card renderers to determine element injection.
+     * 
+     * @returns {boolean} True if disabled; false otherwise.
+     * @public
+     */
+    getDisableBlurhash() {
+        return this._disableBlurhash;
+    }
+
+    /**
+     * Set onlyBlurHashBackdrop setting
+     * 
+     * @param {boolean} only - True to use only BlurHash for Details Backdrop; false to load backdrop image too.
+     * @param {boolean} [save=true] - Persist the preference locally.
+     * @public
+     */
+    setOnlyBlurHashBackdrop(only, save = true) {
+        this._onlyBlurHashBackdrop = only;
+        
+        if (only) {
+            document.documentElement.setAttribute('data-only-blurhash-backdrop', 'true');
+        } else {
+            document.documentElement.removeAttribute('data-only-blurhash-backdrop');
+        }
+
+        if (save) {
+            storage.setItem('litefin:onlyBlurHashBackdrop', only ? 'true' : 'false');
+        }
+
+        log.info(`Only BlurHash Backdrop set to: ${only}`);
+        eventBus.emit('onlyBlurHashBackdrop:changed', { only });
+    }
+
+    /**
+     * Get onlyBlurHashBackdrop setting value
+     * 
+     * @returns {boolean}
+     * @public
+     */
+    getOnlyBlurHashBackdrop() {
+        return this._onlyBlurHashBackdrop;
     }
 
     // Component registration (Existing logic maintained)

@@ -79,6 +79,18 @@ class PlayerPage extends Page {
         this._secondarySubtitleEndTime = null;
     }
 
+    /**
+     * ========================================================================
+     * OSD CONTROLLER PUBLIC ACCESSOR
+     * ========================================================================
+     * Exposes the active OSD Controller instance to external coordinators
+     * such as the RemoteButtonManager. Enables custom hardware remote mapping.
+     * ========================================================================
+     */
+    get osd() {
+        return this._osd;
+    }
+
     render() {
         return `
             <div class="page player-page">
@@ -577,7 +589,14 @@ class PlayerPage extends Page {
             //    so OSD button clicks can never accidentally reach this handler even if
             //    stopPropagation() is still in flight on older TV browsers.
             this.el.addEventListener('click', (e) => {
-                if (!PlayerSettings.get('enableMagicCursor')) return;
+                /*
+                 * DELIBERATE PHYSICAL CLICK EXEMPTION:
+                 * We do NOT bypass physical clicks when 'enableMagicCursor' is false.
+                 * The user turned off "enableMagicCursor" to prevent accidental pointer
+                 * movements (gyro shakes) from waking the OSD. But if they physically
+                 * click the video background, it is a deliberate intent to wake up the
+                 * OSD or toggle playback state.
+                 */
 
                 const osdOverlay = this.el.querySelector('#osd-overlay');
 
@@ -615,31 +634,33 @@ class PlayerPage extends Page {
             this.on('key:pause', () => this._onRemotePause());
             this.on('key:playPause', () => this._onRemotePlayPause());
             this.on('key:stop', () => this._onRemoteStop());
-            this.on('key:next', () => {
-                // LG channel-rocker Up (KeyCode 33). When the user opts in, jump to
-                // next chapter instead of switching episodes — matches upstream
-                // jellyfin-webos behaviour. Only remaps physical keys, not the
-                // 'remote:next' command coming from the Jellyfin remote-control API.
+            this.on('key:next', () => this._onRemoteNext());
+            this.on('key:previous', () => this._onRemotePrevious());
+            this.on('key:channelUp', () => {
+                // Optional LG channel-rocker override: jump chapters during VOD playback.
+                // Keep upstream Live TV channel switching as the fallback.
                 if (PlayerSettings.get('channelRockerJumpsChapters')
                     && this._player
                     && typeof this._player.nextChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0) {
+                    && (this._player.getChapters?.().length || 0) > 0
+                    && this._item?.Type !== 'TvChannel') {
                     log.debug('Channel Up -> next chapter (user preference)');
                     this._player.nextChapter();
                     return;
                 }
-                this._onRemoteNext();
+                this._onRemoteChannelUp();
             });
-            this.on('key:previous', () => {
+            this.on('key:channelDown', () => {
                 if (PlayerSettings.get('channelRockerJumpsChapters')
                     && this._player
                     && typeof this._player.previousChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0) {
+                    && (this._player.getChapters?.().length || 0) > 0
+                    && this._item?.Type !== 'TvChannel') {
                     log.debug('Channel Down -> previous chapter (user preference)');
                     this._player.previousChapter();
                     return;
                 }
-                this._onRemotePrevious();
+                this._onRemoteChannelDown();
             });
 
             this.on('key:rewind', () => {
@@ -754,27 +775,58 @@ class PlayerPage extends Page {
      * @returns {number|undefined} The resolved track index, or undefined if no match
      */
     _resolveTrackByLang(mediaSource, type, targetLang, targetTitle) {
+        // Guard check: Ensure mediaSource and MediaStreams exist before proceeding
         if (!mediaSource || !mediaSource.MediaStreams) return undefined;
+        // Guard check: Ensure targetLang is valid
         if (!targetLang) return undefined;
 
-        // If the user explicitly disabled subtitles via session memory
+        // Special case: If user explicitly disabled subtitles via session memory
         if (type === 'Subtitle' && targetLang === 'none') {
             return -1;
         }
 
-        const streams = mediaSource.MediaStreams.filter((s) => s.Type === type);
+        // =========================================================================
+        // PGS Subtitle Filter Guard
+        //
+        // If the user has disabled PGS rendering completely in settings ('disable'),
+        // we must exclude PGS streams from candidate track resolution. This prevents
+        // session track memory from restoring a disabled PGS subtitle track and causing
+        // subtitles to end up completely off, falling back to a valid track instead.
+        // =========================================================================
+        const disablePgs = PlayerSettings.get('pgsPlaybackMode') === 'disable';
+
+        // Filter the streams to only get the ones of the requested type (Audio/Subtitle)
+        const streams = mediaSource.MediaStreams.filter((s) => {
+            // Ensure stream type matches the requested type
+            if (s.Type !== type) return false;
+
+            // Apply PGS filter guard to subtitle streams if PGS playback mode is disabled
+            if (type === 'Subtitle' && disablePgs) {
+                const codec = (s.Codec || '').toLowerCase();
+                if (codec === 'pgs' || codec === 'pgssub') {
+                    // Exclude disabled PGS track
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        // If no matching candidate streams are found, return undefined
         if (streams.length === 0) return undefined;
 
-        // 1. Try exact match: Language + Title
+        // 1. Try exact match: Match both Language and Display Title/Title
         const exactMatch = streams.find(
             (s) => (s.Language || 'none') === targetLang && (s.DisplayTitle || s.Title || 'none') === targetTitle
         );
+        // If exact match found, return its index
         if (exactMatch) return exactMatch.Index;
 
-        // 2. Fall back to Language only
+        // 2. Fall back to Language only match
         const langMatch = streams.find((s) => (s.Language || 'none') === targetLang);
+        // If language match found, return its index
         if (langMatch) return langMatch.Index;
 
+        // Return undefined if no matches could be resolved
         return undefined;
     }
 
@@ -805,7 +857,9 @@ class PlayerPage extends Page {
 
             // If OSD is already up (restarting playback), update its title/metadata
             if (this._osd) {
-                this._osd.updateItem(this._item);
+                // If we have a cached program for this channel, prefer it over the generic channel item
+                const metadataItem = this._currentLiveTvProgram || this._item;
+                this._osd.updateItem(metadataItem);
             }
         }
 
@@ -1179,7 +1233,23 @@ class PlayerPage extends Page {
         });
 
         // Bind events
-        this._osd.on('exit', () => this._stopAndExit());
+        this._osd.on('exit', () => {
+            // ================================================================
+            // TRANSITION GUARD FOR EXIT SIGNALS
+            // ================================================================
+            // In webOS and other smart TV browsers, DOM manipulation (such as 
+            // cycling the video container to clear hardware buffers) triggers 
+            // focus loss which can synthesize back / exit signals. 
+            //
+            // If the player is currently in the process of switching tracks,
+            // ignore this command entirely to prevent unexpected shutdowns.
+            // ================================================================
+            if (this._isSwitching) {
+                log.warn('Ignoring OSD exit command during track transition.');
+                return;
+            }
+            this._stopAndExit();
+        });
         this._osd.on('next', () => this._playNextItem()); // Ensure OSD emits this
         this._osd.on('previous', () => this._playPreviousItem()); // Ensure OSD emits this
         /* Queue modal: instant skip to a specific index in the play queue. */
@@ -1193,6 +1263,14 @@ class PlayerPage extends Page {
 
         // Register as child component for automatic cleanup on page destroy
         this.addChild(this._osd);
+
+        // SYNC INITIAL METADATA:
+        // If _updateLiveTvTitle already fetched the program before the OSD was ready,
+        // push it now so the title element populates immediately on render.
+        if (this._currentLiveTvProgram) {
+            log.info('OSD ready - Syncing cached program metadata:', this._currentLiveTvProgram.Name);
+            this._osd.updateItem(this._currentLiveTvProgram);
+        }
 
         if (this._player) {
             const resolvedSource = this._player.getCurrentMediaSource?.();
@@ -1319,7 +1397,17 @@ class PlayerPage extends Page {
         }
 
         // 2. Main Flow: Check if we can play next item (RepeatAll is handled inside hasNext())
-        if (playQueue.hasNext()) {
+        // ---------------------------------------------------------------------
+        // Check if the current item is a TV show episode, and if so, respect
+        // the user's "Play next episode automatically" preference. If the setting
+        // is disabled, we should exit the player instead of playing the next episode.
+        // For non-episode media types (e.g. movies, music tracks), we always
+        // advance automatically through the playlist queue.
+        // ---------------------------------------------------------------------
+        const isEpisodeItem = this._item?.Type === 'Episode';
+        const isAutoPlayEnabled = !isEpisodeItem || PlayerSettings.get('enableNextEpisodeAutoPlay');
+
+        if (playQueue.hasNext() && isAutoPlayEnabled) {
             log.info('Item ended, auto-advancing to next item');
             this._playNextItem();
             eventBus.emit('player:ended', { item: this._item });
@@ -1395,6 +1483,12 @@ class PlayerPage extends Page {
                 // Reset Up Next and Lyrics state for the new track
                 this._osd.resetUpNext();
                 this._osd.resetLyrics();
+            }
+
+            // Update title for Live TV items to show current program
+            if (this._item.Type === 'TvChannel') {
+                this._currentLiveTvProgram = null;
+                this._updateLiveTvTitle();
             }
 
             // Restart playback
@@ -1519,6 +1613,12 @@ class PlayerPage extends Page {
                         this._osd.resetLyrics();
                     }
 
+                    // Update title for Live TV items to show current program
+                    if (this._item.Type === 'TvChannel') {
+                        this._currentLiveTvProgram = null;
+                        this._updateLiveTvTitle();
+                    }
+
                     await this._startPlayback();
 
                     this._showLoading(false);
@@ -1578,6 +1678,12 @@ class PlayerPage extends Page {
                     // Reset Up Next and Lyrics state
                     this._osd.resetUpNext();
                     this._osd.resetLyrics();
+                }
+
+                // Update title for Live TV items to show current program
+                if (this._item.Type === 'TvChannel') {
+                    this._currentLiveTvProgram = null;
+                    this._updateLiveTvTitle();
                 }
 
                 await this._startPlayback();
@@ -1719,6 +1825,11 @@ class PlayerPage extends Page {
                 this._osd.resetLyrics();
             }
 
+            // Update title for Live TV items to show current program
+            if (this._item.Type === 'TvChannel') {
+                this._updateLiveTvTitle();
+            }
+
             await this._startPlayback();
 
             this._showLoading(false);
@@ -1832,8 +1943,13 @@ class PlayerPage extends Page {
             overlay.innerHTML = `<span class="subtitle-line">${data.text}</span>`;
             overlay.classList.remove('hidden');
 
-            // Apply user styles
-            const styles = SubtitleStyles.getTextStyles();
+            /* -------------------------------------------------------------
+               Determine if active media source represents HDR content.
+               Pass HDR context to get independent opacity styles.
+               ------------------------------------------------------------- */
+            const isHdr = this._player?.isCurrentMediaHDR?.() || false;
+            const styles = SubtitleStyles.getTextStyles(isHdr);
+            
             // Apply to the span
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
@@ -1894,8 +2010,13 @@ class PlayerPage extends Page {
             overlay.innerHTML = `<span class="subtitle-line">${data.text}</span>`;
             overlay.classList.remove('hidden');
 
-            // Apply secondary text styles — inherits primary appearance, overrides size
-            const styles = SubtitleStyles.getSecondaryTextStyles();
+            /* -------------------------------------------------------------
+               Retrieve player HDR state to fetch appropriate opacity values.
+               Secondary subtitles inherit opacity and styling from primary settings.
+               ------------------------------------------------------------- */
+            const isHdr = this._player?.isCurrentMediaHDR?.() || false;
+            const styles = SubtitleStyles.getSecondaryTextStyles(isHdr);
+            
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
                 SubtitleStyles.applyStyles(span, styles);
@@ -2114,6 +2235,12 @@ class PlayerPage extends Page {
      * Both primary and secondary overlays are refreshed here.
      */
     _refreshSubtitleStyles() {
+        /* -------------------------------------------------------------
+           Determine active playback HDR format to correctly choose
+           between SDR and HDR text opacity settings.
+           ------------------------------------------------------------- */
+        const isHdr = this._player?.isCurrentMediaHDR?.() || false;
+
         // Refresh primary overlay
         const overlay = document.getElementById('subtitle-overlay');
         if (overlay && !overlay.classList.contains('hidden')) {
@@ -2121,8 +2248,8 @@ class PlayerPage extends Page {
             if (span) {
                 log.debug('Refreshing primary subtitle styles');
 
-                // Re-apply text styles
-                const styles = SubtitleStyles.getTextStyles();
+                // Re-apply text styles with current HDR status
+                const styles = SubtitleStyles.getTextStyles(isHdr);
                 SubtitleStyles.applyStyles(span, styles);
 
                 // Re-apply container styles (position/window)
@@ -2146,8 +2273,8 @@ class PlayerPage extends Page {
             if (span) {
                 log.debug('Refreshing secondary subtitle styles');
 
-                // Secondary uses inherited styles with its own size override
-                const styles = SubtitleStyles.getSecondaryTextStyles();
+                // Secondary uses inherited styles with its own size override and respects HDR opacity settings
+                const styles = SubtitleStyles.getSecondaryTextStyles(isHdr);
                 SubtitleStyles.applyStyles(span, styles);
 
                 const windowStyles = SubtitleStyles.getSecondaryWindowStyles();
@@ -2535,6 +2662,19 @@ class PlayerPage extends Page {
     onBack() {
         log.info('onBack() called');
 
+        // ====================================================================
+        // PHYSICAL / PLATFORM BACK BUTTON TRANSITION GUARD
+        // ====================================================================
+        // Discard any back button presses or synthetic back key events from 
+        // the host environment while transitioning tracks. This ensures that 
+        // focus jumps or physical remote hits during the brief settle window 
+        // do not cancel the upcoming playback session.
+        // ====================================================================
+        if (this._isSwitching) {
+            log.info('Ignoring back event during in-progress track switch.');
+            return true;
+        }
+
         // Delegate to OSD — it handles menu close → OSD hide → exit chain
         if (this._osd?.handleBack?.()) {
             log.info('OSD handled back event');
@@ -2729,6 +2869,8 @@ class PlayerPage extends Page {
     async _updateLiveTvTitle() {
         if (!this._item || this._item.Type !== 'TvChannel') return;
 
+        const channelIdAtStart = this._item.Id;
+
         try {
             log.info('Fetching current program for channel:', this._item.Name);
             const programs = await api.getLiveTvPrograms({
@@ -2738,13 +2880,22 @@ class PlayerPage extends Page {
             });
 
             if (programs && programs.Items && programs.Items.length > 0) {
+                // IMPORTANT: Only apply if we are still on the SAME channel
+                if (this._item.Id !== channelIdAtStart) {
+                    log.info('Program fetch returned but channel has changed. Ignoring.');
+                    return;
+                }
+
                 const program = programs.Items[0];
                 log.info('Current program:', program.Name);
 
-                // Set the page title to "Channel: Program"
-                this.title = `${this._item.Name}: ${program.Name}`;
+                // Enrich program with channel info for better OSD display
+                program.ChannelName = this._item.Name;
+                program.ChannelNumber = this._item.Number || this._item.ChannelNumber;
+                
+                // Cache for OSD init sync and playback start sync
+                this._currentLiveTvProgram = program;
 
-                // Update OSD if it exists
                 if (this._osd) {
                     this._osd.updateItem(program);
                 }
@@ -2759,6 +2910,16 @@ class PlayerPage extends Page {
      * @param {number} direction - 1 for Up, -1 for Down
      * @private
      */
+    _onRemoteChannelUp() {
+        log.info('Remote: Channel Up');
+        this._handleChannelChange(1);
+    }
+
+    _onRemoteChannelDown() {
+        log.info('Remote: Channel Down');
+        this._handleChannelChange(-1);
+    }
+
     async _handleChannelChange(direction) {
         if (this._isSwitching) return;
         if (!this._item || this._item.Type !== 'TvChannel') {
@@ -2771,10 +2932,9 @@ class PlayerPage extends Page {
 
         try {
             // 1. Ensure we have the channel list
-            if (!this._channels) {
-                log.info('Fetching channel list for navigation...');
-                const result = await api.getLiveTvChannels();
-                this._channels = result.Items || [];
+            if (!this._channels || this._channels.length === 0) {
+                this._channels = playQueue.getQueue() || [];
+                log.info(`Using ${this._channels.length} channels from PlayQueue for navigation.`);
             }
 
             if (this._channels.length <= 1) {
@@ -2787,8 +2947,15 @@ class PlayerPage extends Page {
             // 2. Find current channel index
             const currentIndex = this._channels.findIndex((c) => c.Id === this._item.Id);
             if (currentIndex === -1) {
-                // Not in current list (maybe list updated?), just take first
-                await this._switchChannel(this._channels[0]);
+                log.warn(`Current channel (${this._item.Name}, ${this._item.Id}) not found in navigation list. Falling back to first channel.`);
+                const firstChannel = this._channels[0];
+                if (firstChannel.Id === this._item.Id) {
+                    log.info('Fallback channel is already playing - ignoring switch.');
+                    this._showLoading(false);
+                    this._isSwitching = false;
+                    return;
+                }
+                await this._switchChannel(firstChannel);
                 return;
             }
 
@@ -2817,6 +2984,13 @@ class PlayerPage extends Page {
      * @private
      */
     async _switchChannel(nextChannel) {
+        if (!nextChannel || nextChannel.Id === this._item.Id) {
+            log.debug('Ignoring channel switch: already on this channel or invalid target');
+            return;
+        }
+
+        log.info(`[ChannelSwitch] Transitioning from ${this._item.Name} (${this._item.Id}) to ${nextChannel.Name} (${nextChannel.Id})`);
+
         // Stop current playback cleanly
         if (this._player?.stop) {
             // Capture current info for reporting
@@ -2827,15 +3001,17 @@ class PlayerPage extends Page {
             await this._reportPlaybackStopped(mediaSource, positionTicks, false);
         }
 
-        // Briefly settle hardware
-        await new Promise((r) => setTimeout(r, 300));
+        // Briefly settle hardware to prevent decoder state overlaps
+        await new Promise((r) => setTimeout(r, 400));
 
         // Update state for new channel
+        const oldItem = this._item;
         this._item = nextChannel;
         this.title = nextChannel.Name;
         this._resumePosition = 0;
         this._hasReportedStart = false;
         this._cachedMediaSource = null;
+        this._currentLiveTvProgram = null;
 
         // Fetch current program info asynchronously so we don't block start
         this._updateLiveTvTitle();
@@ -2845,6 +3021,8 @@ class PlayerPage extends Page {
             this._osd.updateItem(nextChannel);
             this._osd.resetUpNext();
         }
+
+        log.info('[ChannelSwitch] State updated, initializing new playback session...');
 
         // Start new playback
         await this._startPlayback();

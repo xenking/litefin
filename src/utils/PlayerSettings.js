@@ -16,6 +16,7 @@
 import { logger } from './Logger.js';
 import { storage } from './StorageService.js';
 import { eventBus } from '../core/EventBus.js';
+import { platformInfo } from './PlatformInfo.js';
 
 const log = logger.create('PlayerSettings');
 
@@ -130,11 +131,31 @@ const DEFAULTS = {
     // Force text-only rendering for ASS/SSA (disables libjass)
     disableAssStyling: false,
 
-    // Subtitle text color
+    // Subtitle text color for SDR content
     subtitleTextColor: '#ffffff',
 
+    /* -------------------------------------------------------------------------
+       HDR SUBTITLE TEXT COLOR
+       -------------------------------------------------------------------------
+       Separate color configuration dedicated for HDR/Dolby Vision playback.
+       Allows customizing subtitle text chromaticity independently under high-contrast
+       high peak-luminance dynamic ranges.
+       ------------------------------------------------------------------------- */
+    subtitleTextColorHdr: '#ffffff',
+
     // Subtitle text opacity (0-100)
+    // Used specifically when rendering subtitles over SDR content
     subtitleTextOpacity: 100,
+
+    /* -------------------------------------------------------------------------
+       HDR SUBTITLE TEXT OPACITY
+       -------------------------------------------------------------------------
+       Separate transparency setting (0-100) dedicated for HDR playback.
+       This enables dialing down the blinding intensity of subtitles when the TV
+       switches into high-brightness HDR/Dolby Vision video modes, without
+       affecting the standard readability of subtitles in SDR content.
+       ------------------------------------------------------------------------- */
+    subtitleTextOpacityHdr: 100,
 
     // Subtitle background color
     subtitleTextBackground: 'transparent',
@@ -295,7 +316,7 @@ const DEFAULTS = {
     // When true, the LG remote Channel Up / Channel Down rocker (PageUp/PageDown,
     // KeyCode 33/34) jumps to next/previous chapter during playback instead of
     // triggering the default platform behaviour (episode switch / LiveTV channel).
-    // Matches upstream jellyfin-webos behaviour.
+    // Live TV channel switching remains the fallback.
     channelRockerJumpsChapters: false,
 
     // When true, the user's selected audio + subtitle tracks in one episode are
@@ -306,6 +327,17 @@ const DEFAULTS = {
     // an LRU cap of 50 seasons — oldest entries fall off silently. See
     // utils/SeasonTrackPrefStore.js.
     persistTrackSelectionInSeason: false,
+
+    /**
+     * =========================================================================
+     * UP NEXT DIALOG TOGGLE
+     * =========================================================================
+     * Controls whether the interactive countdown card (Up Next dialog) is shown
+     * near the end of an episode playthrough. When enabled, it allows the user
+     * to manually advance early or hide the prompt.
+     * =========================================================================
+     */
+    enableNextUpDialog: true,
 
     // Show trickplay (sprite-sheet) thumbnail previews when scrubbing through videos.
     // Disable to skip all trickplay calculations and image fetches entirely.
@@ -321,7 +353,8 @@ const DEFAULTS = {
     seekWithArrows: true,
 
     // Enable mouse/magic cursor support in the OSD (hover and click)
-    enableMagicCursor: true,
+    // Disabled by default on Tizen due to cursor interaction bugs
+    enableMagicCursor: !platformInfo.isTizen,
 
     // Show timestamp and trickplay images on hover with mouse
     enableHoverTrickplay: false,
@@ -366,7 +399,19 @@ const DEFAULTS = {
     skipActionRecap: 'None',
 
     // Preview/next-episode teaser segment action
-    skipActionPreview: 'None'
+    skipActionPreview: 'None',
+
+    // Show show/movie logo in OSD instead of text title
+    osdShowLogo: false,
+
+    // Hide production year from the OSD title
+    osdHideYear: false,
+
+    // Hide the show name (or logo) for episodes
+    osdHideShowName: false,
+
+    // Size of the show/movie logo in OSD ('small', 'medium', 'large')
+    osdLogoSize: 'medium'
 };
 
 /**

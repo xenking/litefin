@@ -239,20 +239,20 @@ class LibraryPage extends Page {
         } else {
             // Setup default state for virtual library
             let virtualTitle = i18n.t('SearchResults');
-            
+
             if (this.params.personName) {
                 virtualTitle = decodeURIComponent(this.params.personName);
             } else if (this.params.searchTerm) {
                 virtualTitle = `${i18n.t('Search')}: ${decodeURIComponent(this.params.searchTerm)}`;
             }
 
-            this.state.libraryInfo = { 
-                Name: virtualTitle, 
+            this.state.libraryInfo = {
+                Name: virtualTitle,
                 CollectionType: 'all',
                 // Propagate personId to libraryInfo so filters know the context if needed
-                PersonId: this.params.personId 
+                PersonId: this.params.personId
             };
-            
+
             this.$('#library-title').textContent = virtualTitle;
             this.title = virtualTitle;
         }
@@ -266,12 +266,13 @@ class LibraryPage extends Page {
             Object.assign(this.state, savedState.stateData);
 
             // ------------------------------------------------------------------
-            // Load persisted view mode for this library.
+            // Load persisted view mode, sort configurations, and active filters.
             // We do this AFTER the Object.assign so the cache doesn't overwrite
             // a preference the user changed while browsing back and forth.
             // ------------------------------------------------------------------
             this._loadPersistedViewMode();
             this._loadPersistedSortMode();
+            this._loadPersistedFilters();
 
             // 1. Setup UI Components
             this._renderTabs();
@@ -344,10 +345,12 @@ class LibraryPage extends Page {
             await this._fetchLibraryInfo();
         }
 
-        // Load persisted view mode now that we know the libraryId and collectionType.
-        // This happens before _renderGrid() so the correct mode is active from the start.
+        // Load persisted view mode, sort configurations, and filters now that we know
+        // the libraryId and collectionType. This happens before _renderGrid() so the correct
+        // display modes and subsets are active from the very beginning.
         this._loadPersistedViewMode();
         this._loadPersistedSortMode();
+        this._loadPersistedFilters();
 
         // 2. Setup UI Components
         this._renderTabs();
@@ -458,10 +461,27 @@ class LibraryPage extends Page {
     }
 
     _setupFocus() {
-        // Determine start section
-        // For BoxSets, tabs are hidden, so start at Controls or Grid
         const collectionType = this.state.libraryInfo?.CollectionType;
+        const autoFocusFirstItem = storage.getItem('pref:focusFirstItemLibrary') !== 'false';
 
+        // If we have items loaded, default focus to the grid (first item) or first horizontal row
+        if (autoFocusFirstItem && this.state.items && this.state.items.length > 0) {
+            const isHorizontalLayout =
+                this.state.viewType === 'Genres' ||
+                this.state.viewType === 'MusicGenres' ||
+                this.state.viewType === 'Suggestions' ||
+                this.state.viewType === 'Upcoming';
+
+            if (isHorizontalLayout) {
+                this.setActiveSection('row-0');
+            } else {
+                this.setActiveSection('library-grid');
+            }
+            return;
+        }
+
+        // Determine start section fallback
+        // For BoxSets, tabs are hidden, so start at Controls or Grid
         if (collectionType === 'boxsets' || collectionType === 'playlists') {
             // Try controls first (Sort/Filter), else Grid
             if (this.$('#library-controls')?.style.display !== 'none') {
@@ -496,7 +516,7 @@ class LibraryPage extends Page {
         this.$('#alpha-picker')?.addEventListener('click', this._handleAlphaClick.bind(this));
         this.$('#btn-prev')?.addEventListener('click', () => this._handlePageChange(-1));
         this.$('#btn-next')?.addEventListener('click', () => this._handlePageChange(1));
-        this.$('#btn-prev-top')?.addEventListener('click', () => this._handlePageChange(1));
+        this.$('#btn-prev-top')?.addEventListener('click', () => this._handlePageChange(-1));
         this.$('#btn-next-top')?.addEventListener('click', () => this._handlePageChange(1));
         this.$('#btn-reset-filters')?.addEventListener('click', this._handleResetFilters.bind(this));
 
@@ -517,12 +537,13 @@ class LibraryPage extends Page {
                     const headerBtn = e.target.closest('.header-focusable');
                     if (headerBtn) {
                         e.stopPropagation();
-                        const genreId = headerBtn.dataset.genreId || headerBtn.closest('.library-row')?.dataset?.genreId;
+                        const genreId =
+                            headerBtn.dataset.genreId || headerBtn.closest('.library-row')?.dataset?.genreId;
                         if (genreId) {
                             const now = Date.now();
                             if (now - lastActivateTime < 400) return;
                             lastActivateTime = now;
-                            
+
                             log.info('Navigating to Genre:', genreId);
                             let sectionId = null;
                             const rowAncestor = headerBtn.closest('.library-row');
@@ -656,19 +677,23 @@ class LibraryPage extends Page {
                     item.CollectionType = 'music';
                 } else if (['Series', 'Season', 'Episode', 'TvChannel', 'TvProgram'].includes(item.Type)) {
                     item.CollectionType = 'tvshows';
+                } else if (item.Type === 'MusicVideo') {
+                    item.CollectionType = 'musicvideos';
                 } else if (['Movie', 'BoxSet', 'Video'].includes(item.Type)) {
                     item.CollectionType = 'movies';
                 }
             }
 
-            // Flag this as a folder-based library if it matches 'folders' type 
+            // Flag this as a folder-based library if it matches 'folders' type
             // or is a generic collection without a specific media type.
-            this.state.isFolderLibrary = 
-                item.CollectionType === 'folders' || 
-                (!item.CollectionType && (item.Type === 'CollectionFolder' || item.Type === 'UserView' || item.Type === 'Folder'));
+            this.state.isFolderLibrary =
+                item.CollectionType === 'folders' ||
+                (!item.CollectionType &&
+                    (item.Type === 'CollectionFolder' || item.Type === 'UserView' || item.Type === 'Folder'));
 
             // If the item fetched is a Folder, we are in a sub-folder view.
-            this.state.isSubFolder = item.Type === 'Folder' || (item.Type === 'CollectionFolder' && !item.CollectionType && item.ParentId);
+            this.state.isSubFolder =
+                item.Type === 'Folder' || (item.Type === 'CollectionFolder' && !item.CollectionType && item.ParentId);
 
             this.state.libraryInfo = item;
             this.$('#library-title').textContent = item.Name;
@@ -734,7 +759,12 @@ class LibraryPage extends Page {
             // Show a skeleton whose shape matches the active view mode.
             // For forced landscape tab types, ignore viewMode and show landscape skeletons.
             const skeletonMode = isLandscape ? 'thumb' : this.state.viewMode;
-            grid.innerHTML = CardRenderer.createSkeletonHtml(12, isLandscape, skeletonMode);
+            const hideLibraryLabels = storage.getItem('pref:hideLibraryLabels') === 'true';
+            const isModern = document.documentElement.getAttribute('data-layout') === 'modern';
+            const isLibraryView = this.state.viewMode === 'library' || this.state.libraryInfo?.CollectionType === 'folders';
+            const shouldHideLabels = (isLibraryView && hideLibraryLabels) || (isLibraryView && isModern);
+
+            grid.innerHTML = CardRenderer.createSkeletonHtml(12, isLandscape, skeletonMode, shouldHideLabels);
         }
 
         try {
@@ -767,7 +797,7 @@ class LibraryPage extends Page {
                 params.IncludeItemTypes = this.params.includeItemTypes;
             }
 
-            // If it's a folder-based library (generic/Home Videos) or we are explicitly 
+            // If it's a folder-based library (generic/Home Videos) or we are explicitly
             // in a "Folders" tab, disable recursion so we can browse the hierarchy.
             if (this.state.isFolderLibrary || this.state.viewType === 'Folders') {
                 params.Recursive = false;
@@ -798,6 +828,8 @@ class LibraryPage extends Page {
                 subViewItemTypes = 'Series';
             } else if (info?.CollectionType === 'movies') {
                 subViewItemTypes = 'Movie';
+            } else if (info?.CollectionType === 'musicvideos') {
+                subViewItemTypes = 'MusicVideo';
             } else {
                 log.info(
                     'Defaulting to Movie/TV subview types for unknown collection:',
@@ -899,12 +931,18 @@ class LibraryPage extends Page {
                     params.IncludeItemTypes = 'Series';
                 } else if (this.state.libraryInfo?.CollectionType === 'movies') {
                     params.IncludeItemTypes = 'Movie';
-                } else if (this.state.libraryInfo?.CollectionType === 'boxsets' || this.state.libraryInfo?.CollectionType === 'playlists') {
-                    params.IncludeItemTypes = this.state.libraryInfo.CollectionType === 'boxsets' ? 'BoxSet' : 'Playlist';
+                } else if (
+                    this.state.libraryInfo?.CollectionType === 'boxsets' ||
+                    this.state.libraryInfo?.CollectionType === 'playlists'
+                ) {
+                    params.IncludeItemTypes =
+                        this.state.libraryInfo.CollectionType === 'boxsets' ? 'BoxSet' : 'Playlist';
                     params.Recursive = true;
                 } else if (this.state.libraryInfo?.CollectionType === 'music' && !this.params.genreId) {
                     // For standard Item fetches in Music libraries without specific subview filters like genre
                     params.IncludeItemTypes = 'MusicAlbum';
+                } else if (this.state.libraryInfo?.CollectionType === 'musicvideos') {
+                    params.IncludeItemTypes = 'MusicVideo';
                 }
                 result = await api.getItems(params);
             } else if (viewType === 'Suggestions') {
@@ -942,21 +980,24 @@ class LibraryPage extends Page {
                         rows.push({
                             title: i18n.t('HeaderRecentlyAdded'),
                             items: latest,
-                            cardType: 'square'
+                            cardType: 'square',
+                            contextType: 'music'
                         });
                     }
                     if (recentlyPlayed.Items && recentlyPlayed.Items.length > 0) {
                         rows.push({
                             title: i18n.t('HeaderRecentlyPlayed'),
                             items: recentlyPlayed.Items,
-                            cardType: 'square'
+                            cardType: 'square',
+                            contextType: 'music'
                         });
                     }
                     if (frequentlyPlayed.Items && frequentlyPlayed.Items.length > 0) {
                         rows.push({
                             title: i18n.t('HeaderFrequentlyPlayed'),
                             items: frequentlyPlayed.Items,
-                            cardType: 'square'
+                            cardType: 'square',
+                            contextType: 'music'
                         });
                     }
                     if (resume.Items && resume.Items.length > 0) {
@@ -972,7 +1013,8 @@ class LibraryPage extends Page {
                         rows.push({
                             title: i18n.t('Artists'),
                             items: favorites.Items,
-                            cardType: 'square'
+                            cardType: 'square',
+                            contextType: 'library'
                         });
                     }
 
@@ -986,6 +1028,77 @@ class LibraryPage extends Page {
                     this._renderHorizontalRows(this.state.items);
                     this._updatePaginationUI();
                     return; // Skip grid render
+                }
+
+                if (collectionType === 'musicvideos') {
+                    // ------------------------------------------------------------------
+                    // Music Video Suggestions
+                    // ------------------------------------------------------------------
+                    const [latest, recentlyPlayed, frequentlyPlayed] = await Promise.all([
+                        api
+                            .getLatestItems(this.state.libraryId, { Limit: 12, IncludeItemTypes: 'MusicVideo' })
+                            .catch(() => []),
+                        api
+                            .getItems({
+                                ParentId: this.state.libraryId,
+                                SortBy: 'DatePlayed',
+                                SortOrder: 'Descending',
+                                Limit: 12,
+                                Recursive: true,
+                                IncludeItemTypes: 'MusicVideo',
+                                Filters: 'IsPlayed'
+                            })
+                            .catch(() => ({ Items: [] })),
+                        api
+                            .getItems({
+                                ParentId: this.state.libraryId,
+                                SortBy: 'PlayCount',
+                                SortOrder: 'Descending',
+                                Limit: 12,
+                                Recursive: true,
+                                IncludeItemTypes: 'MusicVideo',
+                                Filters: 'IsPlayed'
+                            })
+                            .catch(() => ({ Items: [] }))
+                    ]);
+
+                    if (latest && latest.length > 0) {
+                        rows.push({
+                            title: i18n.t('HeaderRecentlyAdded'),
+                            items: latest,
+                            isLandscape: true,
+                            cardType: 'backdrop',
+                            contextType: 'library'
+                        });
+                    }
+                    if (recentlyPlayed.Items && recentlyPlayed.Items.length > 0) {
+                        rows.push({
+                            title: i18n.t('HeaderRecentlyPlayed'),
+                            items: recentlyPlayed.Items,
+                            isLandscape: true,
+                            cardType: 'backdrop',
+                            contextType: 'library'
+                        });
+                    }
+                    if (frequentlyPlayed.Items && frequentlyPlayed.Items.length > 0) {
+                        rows.push({
+                            title: i18n.t('HeaderFrequentlyPlayed'),
+                            items: frequentlyPlayed.Items,
+                            isLandscape: true,
+                            cardType: 'backdrop',
+                            contextType: 'library'
+                        });
+                    }
+
+                    // Guard: Check if we are still on the same tab
+                    if (this.state.viewType !== capturedViewType) {
+                        return;
+                    }
+
+                    this.state.items = rows;
+                    this._renderHorizontalRows(this.state.items);
+                    this._updatePaginationUI();
+                    return;
                 }
 
                 const suggestionTypes = collectionType === 'tvshows' ? 'Series' : 'Movie,Series';
@@ -1044,7 +1157,7 @@ class LibraryPage extends Page {
                     } else if (collectionType === 'music') {
                         header = 'HeaderLatestMusic';
                     }
-                    rows.push({ title: i18n.t(header), items: latest });
+                    rows.push({ title: i18n.t(header), items: latest, contextType: 'suggestion' });
                 }
 
                 // ------------------------------------------------------------------
@@ -1069,7 +1182,11 @@ class LibraryPage extends Page {
                             IncludeItemTypes: suggestionTypes
                         });
                         if (similar.Items && similar.Items.length > 0) {
-                            rows.push({ title: i18n.t('SimilarTo', [targetName]), items: similar.Items });
+                            rows.push({
+                                title: i18n.t('SimilarTo', [targetName]),
+                                items: similar.Items,
+                                contextType: 'suggestion'
+                            });
                         }
                     } catch (e) {
                         log.warn('Failed to load similar suggestions', e);
@@ -1098,7 +1215,8 @@ class LibraryPage extends Page {
                         if (similarFav.Items && similarFav.Items.length > 0) {
                             rows.push({
                                 title: i18n.t('RecommendationBecauseYouLike', [favItem.Name]),
-                                items: similarFav.Items
+                                items: similarFav.Items,
+                                contextType: 'suggestion'
                             });
                         }
                     }
@@ -1161,7 +1279,8 @@ class LibraryPage extends Page {
                             title: genre.Name,
                             genreId: genre.Id,
                             isLazy: false, // Data is fully loaded
-                            items: itemsResult.Items || []
+                            items: itemsResult.Items || [],
+                            contextType: 'genre'
                         };
                     } catch (err) {
                         log.warn(`Failed to load items for genre ${genre.Name}`, err);
@@ -1467,6 +1586,39 @@ class LibraryPage extends Page {
     }
 
     /**
+     * ========================================================================
+     * Filter State Preservation and Rehydration
+     * ========================================================================
+     * Load the user's previously applied filters for this specific library.
+     * Preserving filter preferences ensures a personalized and streamlined
+     * navigation experience across sessions, conforming to state-preservation
+     * recommendations from Apple's Human Interface Guidelines.
+     */
+    _loadPersistedFilters() {
+        // Skip sub-views (genre, studio, tag pages, etc.) to prevent overriding
+        // their specific query parameters with the general library filters.
+        if (this._isSubView()) {
+            return;
+        }
+
+        // Retrieve saved filters for this library from local storage
+        const filtersKey = `pref:library:filters:${this.state.libraryId}`;
+        const savedFilters = storage.getItem(filtersKey);
+
+        if (savedFilters) {
+            try {
+                // Parse the JSON string back into a filters object
+                this.state.filters = JSON.parse(savedFilters);
+                log.info(`[Filters] Rehydrated persisted filters for library ${this.state.libraryId}:`, this.state.filters);
+            } catch (e) {
+                // Fallback gracefully on parsing errors to keep the application stable
+                log.error('Failed to parse persisted filters, falling back to empty state', e);
+                this.state.filters = {};
+            }
+        }
+    }
+
+    /**
      * Resolve the CardRenderer card type string based on the active viewMode,
      * viewType override (Episodes, Networks), and library collection type.
      *
@@ -1477,7 +1629,11 @@ class LibraryPage extends Page {
      */
     _resolveCardType(isLandscape) {
         // Forced tab-type overrides: always resolve before checking user preference
-        if (this.state.viewType === 'Episodes' || this.state.viewType === 'Upcoming' || this.params.includeItemTypes === 'Episode') {
+        if (
+            this.state.viewType === 'Episodes' ||
+            this.state.viewType === 'Upcoming' ||
+            this.params.includeItemTypes === 'Episode'
+        ) {
             return 'episode';
         }
         if (this.state.viewType === 'Networks') {
@@ -1487,8 +1643,9 @@ class LibraryPage extends Page {
         // Custom layout requests from deep links (Music, TV Channels, Artists, People)
         const squareTypes = ['TvChannel', 'MusicAlbum', 'MusicArtist,Artist', 'MusicArtist', 'Audio'];
         if (
-            this.state.libraryInfo?.CollectionType === 'music' || 
+            this.state.libraryInfo?.CollectionType === 'music' ||
             this.state.libraryInfo?.CollectionType === 'homevideos' ||
+            this.state.libraryInfo?.CollectionType === 'musicvideos' ||
             (this.params.includeItemTypes && squareTypes.includes(this.params.includeItemTypes))
         ) {
             // For thumb/banner, use backdrop if available; fall back gracefully
@@ -1510,7 +1667,9 @@ class LibraryPage extends Page {
             case 'banner':
                 return 'backdrop';
             case 'poster':
+                return 'poster';
             case 'small-poster':
+                return 'small-poster';
             case 'list':
             default:
                 return 'poster';
@@ -1534,7 +1693,12 @@ class LibraryPage extends Page {
         const tabsContainer = this.$('#library-tabs');
 
         // Hide tabs for BoxSets (Collections), Playlists, Folder libraries, or if we are deep linking into a subview
-        if (collectionType === 'boxsets' || collectionType === 'playlists' || this.state.isFolderLibrary || this._isSubView()) {
+        if (
+            collectionType === 'boxsets' ||
+            collectionType === 'playlists' ||
+            this.state.isFolderLibrary ||
+            this._isSubView()
+        ) {
             if (tabsContainer) {
                 tabsContainer.style.display = 'none';
                 tabsContainer.innerHTML = '';
@@ -1582,6 +1746,13 @@ class LibraryPage extends Page {
                 { id: 'PhotoAlbums', label: 'PhotoAlbums' },
                 { id: 'Videos', label: 'Videos' }
             ];
+        } else if (collectionType === 'musicvideos') {
+            tabs = [
+                { id: 'Items', label: 'MusicVideos' },
+                { id: 'Suggestions', label: 'Suggestions' },
+                { id: 'Genres', label: 'Genres' },
+                { id: 'Folders', label: 'Folders' }
+            ];
         } else {
             // Generic fallback (Generic Folders, Music Videos, etc.)
             tabs = [
@@ -1605,9 +1776,7 @@ class LibraryPage extends Page {
             <button class="tab-btn ${this.state.viewType === tab.id ? 'active' : ''}" 
                     data-type="${tab.id}" 
                     tabindex="0"
-                    data-i18n="${tab.label}">
-                ${i18n.t(tab.label)}
-            </button>
+                    data-i18n="${tab.label}">${i18n.t(tab.label)}</button>
         `
             )
             .join('');
@@ -1645,9 +1814,7 @@ class LibraryPage extends Page {
                 return `
                 <button class="alpha-btn ${isActive ? 'active' : ''}" 
                         data-char="${char}" 
-                        tabindex="0">
-                    ${char}
-                </button>
+                        tabindex="0">${char}</button>
             `;
             })
             .join('');
@@ -1724,11 +1891,19 @@ class LibraryPage extends Page {
                     viewType === 'Artists' ||
                     viewType === 'AlbumArtists' ||
                     viewType === 'Songs');
-            const isCollections = (collectionType === 'boxsets' || collectionType === 'playlists') && viewType === 'Items';
+            const isCollections =
+                (collectionType === 'boxsets' || collectionType === 'playlists') && viewType === 'Items';
             const isFolderMain = this.state.isFolderLibrary && viewType === 'Items';
             const isEpisodes = viewType === 'Episodes';
             // Do not show any header controls if we are deep linking to a specific genre/studio
-            const shouldShowControls = isMovieMain || isTVMain || isMusicMain || isEpisodes || isCollections || isFolderMain || this._isSubView();
+            const shouldShowControls =
+                isMovieMain ||
+                isTVMain ||
+                isMusicMain ||
+                isEpisodes ||
+                isCollections ||
+                isFolderMain ||
+                this._isSubView();
 
             const btnReset = this.$('#btn-reset-filters');
             if (btnReset) {
@@ -1831,12 +2006,26 @@ class LibraryPage extends Page {
         // Generate HTML using the correct card type and view mode flag
         const html = items
             .map((item) =>
+                // ==========================================================
+                // Grid Card Rendering Configuration
+                // ==========================================================
+                // Here we set 'isGrid: true' to tell the card renderer that 
+                // this card is rendered inside the vertical library grid.
+                // This disables horizontal poster expansions to maintain 
+                // clean, stable column layouts and prevent shifts on TV displays.
+                // ==========================================================
                 CardRenderer.createCardHtml(item, {
                     isLandscape: isLandscape || this.state.viewMode === 'thumb' || this.state.viewMode === 'banner',
                     type: this.state.viewMode === 'banner' ? 'banner' : resolvedCardType,
-                    contextType: this.state.viewType === 'Upcoming' ? 'upcoming' : null,
+                    contextType:
+                        this.state.viewType === 'Upcoming'
+                            ? 'upcoming'
+                            : this.state.viewType === 'Albums'
+                              ? 'music'
+                              : 'library',
                     // Only show rich meta row in list view (rating, score, runtime)
-                    showMeta: !isLandscape && this.state.viewMode === 'list'
+                    showMeta: !isLandscape && this.state.viewMode === 'list',
+                    isGrid: true
                 })
             )
             .join('');
@@ -1857,7 +2046,8 @@ class LibraryPage extends Page {
         const isCollections = (collectionType === 'boxsets' || collectionType === 'playlists') && viewType === 'Items';
         const isFolderMain = this.state.isFolderLibrary && viewType === 'Items';
         const isEpisodes = viewType === 'Episodes';
-        const isAlphaVisible = isMovieMain || isTVMain || isMusicMain || isEpisodes || isCollections || isFolderMain || this._isSubView();
+        const isAlphaVisible =
+            isMovieMain || isTVMain || isMusicMain || isEpisodes || isCollections || isFolderMain || this._isSubView();
 
         // Update Alpha Picker navigation to point to grid
         if (isAlphaVisible) {
@@ -2024,6 +2214,9 @@ class LibraryPage extends Page {
                 </div>
             `;
 
+            // Use row-items (horizontal scroll) for Upcoming/Suggestions, genre-grid-items (grid) for Genres
+            const isHorizontalRow = this.state.viewType === 'Upcoming' || this.state.viewType === 'Suggestions';
+
             // Grid Items (Max 12)
             const displayItems = (row.items || []).slice(0, 12);
             let contentHtml = '';
@@ -2031,19 +2224,27 @@ class LibraryPage extends Page {
             if (displayItems.length > 0) {
                 contentHtml = displayItems
                     .map((item) =>
+                        // -----------------------------------------------------
+                        // Static/Grid Card Rendering
+                        // -----------------------------------------------------
+                        // If this is a static vertical sub-grid (like a Genre list
+                        // under the Genres tab), we set 'isGrid: true' (which is
+                        // !isHorizontalRow) so cards render safely without
+                        // expanding transitions. For horizontal slider rows
+                        // (Upcoming/Suggestions), we leave 'isGrid: false' so they
+                        // can expand beautifully.
+                        // -----------------------------------------------------
                         CardRenderer.createCardHtml(item, {
                             isLandscape: row.isLandscape || false,
                             type: row.cardType || 'poster',
-                            contextType: row.contextType || null
+                            contextType: row.contextType || null,
+                            isGrid: !isHorizontalRow
                         })
                     )
                     .join('');
             } else {
                 contentHtml = '<div class="empty-msg">No items</div>';
             }
-
-            // Use row-items (horizontal scroll) for Upcoming/Suggestions, genre-grid-items (grid) for Genres
-            const isHorizontalRow = this.state.viewType === 'Upcoming' || this.state.viewType === 'Suggestions';
 
             let virtualRow = null;
 
@@ -2230,6 +2431,8 @@ class LibraryPage extends Page {
                 includeItemTypes = 'Series'; // Only show series, not seasons or episodes
             } else if (collectionType === 'movies') {
                 includeItemTypes = 'Movie'; // Only movies
+            } else if (collectionType === 'musicvideos') {
+                includeItemTypes = 'MusicVideo';
             }
 
             const result = await api.getItems({
@@ -2266,9 +2469,17 @@ class LibraryPage extends Page {
 
             const html = items
                 .map((item) =>
+                    // ==========================================================
+                    // Sub-Grid Item Rendering
+                    // ==========================================================
+                    // These genre category row items are rendered as a vertical grid 
+                    // (.genre-grid-items), so they must use isGrid: true to avoid
+                    // horizontal expansions that would overlap column siblings.
+                    // ==========================================================
                     CardRenderer.createCardHtml(item, {
                         isLandscape: false, // Genres usually mix, but mostly posters
-                        type: 'poster'
+                        type: 'poster',
+                        isGrid: true
                     })
                 )
                 .join('');
@@ -2406,11 +2617,13 @@ class LibraryPage extends Page {
             return;
         }
 
-        // Special handling for Photos and Home Videos: open Slideshow
-        if (card.dataset.type === 'Photo' || card.dataset.type === 'Video') {
+        // Special handling for Photos: open Slideshow
+        if (card.dataset.type === 'Photo') {
             log.info('Navigating to Slideshow:', itemId);
             const parentArg = this.params.id || this.state.libraryId;
-            router.navigate(`/slideshow/${itemId}?parentId=${parentArg}&sortBy=${this.state.sortBy}&sortOrder=${this.state.sortOrder}`);
+            router.navigate(
+                `/slideshow/${itemId}?parentId=${parentArg}&sortBy=${this.state.sortBy}&sortOrder=${this.state.sortOrder}`
+            );
             return;
         }
 
@@ -2430,7 +2643,12 @@ class LibraryPage extends Page {
 
         // Special handling for Persons and Artists: navigate to the unified PersonPage
         const itemType = card.dataset.type;
-        if (itemType === 'Person' || itemType === 'MusicArtist' || itemType === 'Artist' || itemType === 'AlbumArtist') {
+        if (
+            itemType === 'Person' ||
+            itemType === 'MusicArtist' ||
+            itemType === 'Artist' ||
+            itemType === 'AlbumArtist'
+        ) {
             log.debug('Navigating to PersonPage:', itemId);
             router.navigate(`/person/${itemId}`);
             return;
@@ -2495,6 +2713,8 @@ class LibraryPage extends Page {
                 } else {
                     includeItemTypes = 'Audio,MusicAlbum';
                 }
+            } else if (collectionType === 'musicvideos') {
+                includeItemTypes = 'MusicVideo';
             }
 
             const params = {
@@ -2549,6 +2769,15 @@ class LibraryPage extends Page {
         this.state.filters = {};
         this.state.nameStartsWith = null;
         this.state.startIndex = 0;
+
+        // ------------------------------------------------------------------
+        // Persist the clean state to local storage.
+        // Clearing persisted filters prevents old selections from lingering.
+        // ------------------------------------------------------------------
+        if (!this._isSubView()) {
+            const filtersKey = `pref:library:filters:${this.state.libraryId}`;
+            storage.removeItem(filtersKey);
+        }
 
         // Update UI components that reflect these states
         this._renderAlphaPicker();
@@ -2957,12 +3186,12 @@ class LibraryPage extends Page {
         if (this.state.libraryInfo) {
             const type = this.state.libraryInfo.CollectionType;
             if (type === 'movies') includeItemTypes = 'Movie';
-            else if (type === 'tvshows') includeItemTypes = 'Series,Episode';
+            else if (type === 'tvshows') includeItemTypes = 'Series';
             else if (type === 'music') includeItemTypes = 'MusicArtist,MusicAlbum,Audio';
         }
 
         const params = {
-            ParentId: this.state.parentId,
+            ParentId: this.state.parentId ? this.state.parentId : this.state.libraryId,
             IncludeItemTypes: includeItemTypes,
             Recursive: true
         };
@@ -3323,11 +3552,31 @@ class LibraryPage extends Page {
         // Actions
         this.$('#btn-filter-clear').addEventListener('click', () => {
             this.state.filters = {};
+
+            // ------------------------------------------------------------------
+            // Remove the persisted filter configuration since user cleared all.
+            // ------------------------------------------------------------------
+            if (!this._isSubView()) {
+                const filtersKey = `pref:library:filters:${this.state.libraryId}`;
+                storage.removeItem(filtersKey);
+            }
+
             renderItems(this.state.activeFilterSection);
         });
 
         this.$('#btn-filter-apply').addEventListener('click', async () => {
             this.state.startIndex = 0;
+
+            // ------------------------------------------------------------------
+            // Persist the newly selected filters.
+            // We stringify the filters object and store it locally so the active
+            // filters are remembered across reloads and pages.
+            // ------------------------------------------------------------------
+            if (!this._isSubView()) {
+                const filtersKey = `pref:library:filters:${this.state.libraryId}`;
+                storage.setItem(filtersKey, JSON.stringify(this.state.filters));
+            }
+
             await this._loadItems();
             this._closeFilterModal();
 
@@ -3529,13 +3778,24 @@ class LibraryPage extends Page {
                 viewType === 'Playlists');
 
         const isCollections = (collectionType === 'boxsets' || collectionType === 'playlists') && viewType === 'Items';
-        const isFolderMain = this.state.isFolderLibrary && viewType === 'Items';
+        
+        // Home Videos, Music Videos, and Photos often use 'Folders' or 'Videos' or 'Photos' viewType
+        const isFolderLikeMain = (collectionType === 'homevideos' || collectionType === 'musicvideos' || collectionType === 'photos') &&
+            (viewType === 'Folders' || viewType === 'Videos' || viewType === 'Photos' || viewType === 'Items');
 
-        const shouldShow = isMovieMain || isTVMain || isEpisodes || isMusicMain || isCollections || isFolderMain;
+        const isFolderMain = (this.state.isFolderLibrary || collectionType === 'folders') && 
+            (viewType === 'Items' || viewType === 'Folders');
+
+        const shouldShow = isMovieMain || isTVMain || isEpisodes || isMusicMain || isCollections || isFolderMain || isFolderLikeMain;
 
         const isSubView = this._isSubView();
-        const isControlsVisible = shouldShow || isSubView;
-        const isAlphaVisible = shouldShow || isSubView;
+        const isSubFolder = this.state.isSubFolder;
+
+        // Controls and Alpha Picker should be visible in main views, sub-views (Genre/Person), 
+        // or when navigating into sub-folders.
+        const isControlsVisible = shouldShow || isSubView || isSubFolder;
+        const isAlphaVisible = shouldShow || isSubView || isSubFolder;
+
 
         const isCollectionsLike = collectionType === 'boxsets' || collectionType === 'playlists';
         const isTabsVisible = !isCollectionsLike && !isSubView;

@@ -79,6 +79,11 @@ export class TizenAVPlayer {
         // secretly resuming playback after a SyncPlay-triggered seek+handshake.
         this._pendingPause = false;
 
+        // Safety timeout ID utilized to guarantee post-seek playback state correction.
+        // On various Samsung Tizen AVPlay configurations, seeking to cached chunks might
+        // not fire buffering events, leaving the player asleep in a READY state.
+        this._seekSafetyTimeoutId = null;
+
         // Check Tizen availability: prioritize webapis (Samsung Hardware API) over tizen (Universal API)
         // On most Samsung TVs, webapis.avplay is the direct hardware interface.
         const avplay = window.webapis?.avplay || window.tizen?.avplay || null;
@@ -188,6 +193,10 @@ export class TizenAVPlayer {
             this._subtitleOffset = 0;
             this._playStartTime = Date.now();
             this._currentPlayOptions = options;
+
+            // Reset the post-seek safety net timer to clear out any stale handlers
+            // leftover from previous media items or streams
+            this._seekSafetyTimeoutId = null;
 
             // Only sleep if we just forcefully stopped an active stream
             if (wasActive) {
@@ -1233,7 +1242,52 @@ export class TizenAVPlayer {
      */
     async _stopInternal() {
         this._activeTizenSubtitleIndex = null;
+
+        // ── Cancel all pending timeouts BEFORE touching AVPlay. ──────────────
+        //
+        // These timers hold closures that reference the AVPlay instance. If they
+        // fire after close(), they attempt to call setSelectTrack / setListener
+        // on a dead decoder, which on Tizen can corrupt the hardware pipeline
+        // and prevent VRAM from being fully reclaimed (causing GPU glitches on
+        // the UI after exiting 4K playback).
+        //
+        if (this._subtitleConfirmTimerId !== null) {
+            clearTimeout(this._subtitleConfirmTimerId);
+            this._subtitleConfirmTimerId = null;
+        }
+        if (this._suppressWaitingTimeout) {
+            clearTimeout(this._suppressWaitingTimeout);
+            this._suppressWaitingTimeout = null;
+        }
+
+        // Unconditionally cancel the seek safety timer on stop to avoid fires
+        // referencing a dead, stopped, or closed player instance
+        if (this._seekSafetyTimeoutId !== null) {
+            clearTimeout(this._seekSafetyTimeoutId);
+            this._seekSafetyTimeoutId = null;
+        }
+
         if (this._avplay) {
+            // ── Remove the event listener FIRST before stop/close. ────────────
+            //
+            // Per Samsung's AVPlay documentation, the listener object holds
+            // internal references to the C++ hardware decoder pipeline.
+            // Calling setListener(null) explicitly instructs the native layer
+            // to release those references BEFORE the decoder is torn down by
+            // stop() and close(). Without this, the decoder's texture surfaces
+            // (which can be 20–50MB+ for 4K content) may remain pinned in VRAM
+            // even after close() returns — causing GPU memory fragmentation that
+            // manifests as UI glitches (white flashes, icon disappearance) on
+            // the next page after playback.
+            //
+            try {
+                this._avplay.setListener(null);
+                log.debug('AVPlay listener cleared (VRAM reference released)');
+            } catch (e) {
+                // Non-fatal on older firmware — log and continue with stop/close.
+                log.debug('setListener(null) failed (non-fatal):', e.message || e);
+            }
+
             // 1. Attempt stop
             try {
                 const state = this._avplay.getState();
@@ -1244,8 +1298,8 @@ export class TizenAVPlayer {
                 log.debug('AVPlay stop failed (possibly already idle):', e.message || e);
             }
 
-            // 2. Force close (True Reset to NONE state)
-            // This is critical for episode-to-episode transitions to clear 
+            // 2. Force close (True Reset to NONE state).
+            // This is critical for episode-to-episode transitions to clear
             // stale buffers and decoder state.
             try {
                 this._avplay.close();
@@ -1301,12 +1355,21 @@ export class TizenAVPlayer {
             const positionMs = Math.floor(targetTicks / 10000);
             this._avplay.seekTo(positionMs);
 
-            // After seekTo(), AVPlay resumes buffering from the new position.
-            // If we were in PLAYING state when the seek was requested (e.g. during
-            // SyncPlay drift correction or a mid-play seek), AVPlay internally
-            // re-enters a READY/buffering phase, which means a subsequent avplay.play()
-            // IS needed. Reset _isTizenPlaying so unpause() -> _checkNativePlay()
-            // (or the direct path) works correctly after the seek.
+            // ========================================================================
+            // Post-Seek State Management and Automatic Playback Resume
+            // ========================================================================
+            //
+            // After executing seekTo(), the AVPlay hardware pipeline begins fetching
+            // and buffering frames from the new position. If we were already playing
+            // (either logically _isPlaying or native _isTizenPlaying), AVPlay transitions
+            // internally into a buffering/READY state, requiring a subsequent .play()
+            // call to resume clock execution.
+            //
+            // We cache if the player was active before seek to initiate our safety timer.
+            // We set _isTizenPlaying to false so that the double-gate checks or unpause
+            // mechanisms know to re-assert play() once buffering completes.
+            //
+            const wasPlayingBeforeSeek = this._isTizenPlaying || this._isPlaying;
             if (this._isTizenPlaying) {
                 this._isTizenPlaying = false;
                 log.debug('seek(): reset _isTizenPlaying for post-seek resume');
@@ -1318,6 +1381,46 @@ export class TizenAVPlayer {
             // Manual timeupdate for paused state (native oncurrentplaytime is only fired when playing)
             const currentTime = targetTicks / 10000000;
             this.onEvent({ type: 'timeupdate', data: { time: currentTime } });
+
+            // ========================================================================
+            // ── Post-Seek Safety Resume Net ──────────────────────────────────────────
+            // ========================================================================
+            //
+            // On certain Tizen firmware models and network states, calling seekTo() can
+            // shift the media pipeline into the READY state without triggering the standard
+            // onbufferingstart / onbufferingcomplete native events. This happens particularly
+            // if the seek target is close to the current location or the chunk was already
+            // fully loaded in memory (such as fast skips triggered by plugins like intro-skipper).
+            //
+            // If those events do not fire, the player gets permanently stuck in the READY
+            // state (paused natively) because the JavaScript state machine never gets the trigger
+            // to execute _checkNativePlay().
+            //
+            // To address this at the core, we implement a 250ms safety timer. If the player
+            // is logically supposed to be playing (_isPlaying is true) but hasn't successfully
+            // resumed native play (_isTizenPlaying remains false) within 250ms, we force
+            // a safety check that triggers _checkNativePlay() to resume playback natively.
+            //
+            // ────────────────────────────────────────────────────────────────────────
+            if (wasPlayingBeforeSeek) {
+                if (this._seekSafetyTimeoutId !== null) {
+                    clearTimeout(this._seekSafetyTimeoutId);
+                }
+                this._seekSafetyTimeoutId = setTimeout(() => {
+                    this._seekSafetyTimeoutId = null;
+                    
+                    // Verify if the session is still active and logically intended to play
+                    if (this._avplay && this._isPrepared && this._isPlaying && !this._isTizenPlaying) {
+                        log.info('seek(): safety timeout fired, re-asserting native playback after skip/seek');
+                        
+                        // Force buffering complete flag to true as a failsafe since the TV is stable
+                        this._bufferingComplete = true;
+                        
+                        // Re-gate and execute play() natively
+                        this._checkNativePlay();
+                    }
+                }, 250);
+            }
         } catch (e) {
             log.error('Seek failed:', e);
         }

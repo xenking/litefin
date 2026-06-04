@@ -35,9 +35,14 @@ function _hexToRgba(hex, opacity) {
 
 /**
  * Generate text CSS styles from settings
+ * 
+ * Supports dynamic selection of subtitle opacity settings depending on
+ * whether the current playing video is encoded in SDR or HDR format.
+ *
+ * @param {boolean} isHdr - Whether the active playback stream is High Dynamic Range
  * @returns {Object[]} Array of {name, value} CSS properties
  */
-export function getTextStyles() {
+export function getTextStyles(isHdr = false) {
     const styles = [];
 
     // Reset properties that might have been set by other modes (like 'border')
@@ -58,6 +63,9 @@ export function getTextStyles() {
             break;
         case 'large':
             styles.push({ name: 'fontSize', value: '6vh' });
+            break;
+        case 'mediumlarge':
+            styles.push({ name: 'fontSize', value: '5.5vh' });
             break;
         case 'small':
             styles.push({ name: 'fontSize', value: '4vh' });
@@ -89,8 +97,16 @@ export function getTextStyles() {
     // ========================================================================
     // ========================================================================
     // Text Opacity
+    // Select the appropriate opacity configuration key dynamically.
+    // HDR content requires distinct luminance levels for overlay transparency.
     // ========================================================================
-    const textOpacity = PlayerSettings.get('subtitleTextOpacity') ?? 100;
+    const opacityKey = isHdr ? 'subtitleTextOpacityHdr' : 'subtitleTextOpacity';
+    
+    /* -------------------------------------------------------------
+       Fetch transparency percentage from player settings backend.
+       Fallback value defaults to 100% (fully opaque).
+       ------------------------------------------------------------- */
+    const textOpacity = PlayerSettings.get(opacityKey) ?? 100;
 
     // ========================================================================
     // Text Shadow / Drop Shadow
@@ -157,8 +173,16 @@ export function getTextStyles() {
 
     // ========================================================================
     // Text Color
+    // Select the appropriate color configuration key dynamically.
+    // HDR media might benefit from softer gray/yellow tones to prevent eye strain.
     // ========================================================================
-    const textColor = PlayerSettings.get('subtitleTextColor') || '#ffffff';
+    const colorKey = isHdr ? 'subtitleTextColorHdr' : 'subtitleTextColor';
+    
+    /* -------------------------------------------------------------
+       Fetch selected hex code from player settings backend.
+       Fallback value defaults to standard White (#ffffff).
+       ------------------------------------------------------------- */
+    const textColor = PlayerSettings.get(colorKey) || '#ffffff';
     // textOpacity is already defined above for shadows
     styles.push({ name: 'color', value: _hexToRgba(textColor, textOpacity) });
 
@@ -210,6 +234,24 @@ export function getTextStyles() {
             break;
         case 'noto-arabic':
             styles.push({ className: 'font-noto-arabic' });
+            break;
+        case 'retrotech':
+            styles.push({ className: 'font-retrotech' });
+            break;
+        case 'kitty':
+            styles.push({ className: 'font-kitty' });
+            break;
+        case 'inter':
+            styles.push({ className: 'font-inter' });
+            break;
+        case 'proxima':
+            styles.push({ className: 'font-proxima' });
+            break;
+        case 'baloo':
+            /* -------------------------------------------------------------
+               Baloo Bhaijaan 2 font option injected into styles array
+               ------------------------------------------------------------- */
+            styles.push({ className: 'font-baloo' });
             break;
         default:
             styles.push({ className: 'font-default' });
@@ -296,12 +338,15 @@ export function getWindowStyles() {
  * Inherits all primary text styles, then overrides fontSize with the
  * secondary-specific size setting.
  *
+ * @param {boolean} isHdr - Whether the active playback stream is High Dynamic Range
  * @returns {Object[]} Array of {name, value} CSS properties
  */
-export function getSecondaryTextStyles() {
-    // Start with the full primary text style set as a base
-    // (font family, color, shadow, weight, opacity, background all inherited)
-    const styles = getTextStyles();
+export function getSecondaryTextStyles(isHdr = false) {
+    /* -------------------------------------------------------------
+       Fetch baseline visual attributes from the primary text styles.
+       Pass down HDR context to apply appropriate opacity setting.
+       ------------------------------------------------------------- */
+    const styles = getTextStyles(isHdr);
 
     // Override just the font size with the secondary-specific size preference
     const size = PlayerSettings.get('secondarySubtitleSize') || 'medium';
@@ -309,6 +354,7 @@ export function getSecondaryTextStyles() {
         extralarge: '8vh',
         larger: '7vh',
         large: '6vh',
+        mediumlarge: '5.5vh',
         medium: '5vh',
         small: '4vh',
         smaller: '3vh'
@@ -384,6 +430,11 @@ const fontClasses = [
     'font-google',
     'font-silkscreen',
     'font-space-grotesk',
+    'font-retrotech',
+    'font-kitty',
+    'font-inter',
+    'font-proxima',
+    'font-baloo',
     'font-default'
 ];
 
@@ -462,6 +513,19 @@ export default {
                 return 'font-silkscreen';
             case 'space-grotesk':
                 return 'font-space-grotesk';
+            case 'retrotech':
+                return 'font-retrotech';
+            case 'kitty':
+                return 'font-kitty';
+            case 'inter':
+                return 'font-inter';
+            case 'proxima':
+                return 'font-proxima';
+            case 'baloo':
+                /* -------------------------------------------------------------
+                   Map internal 'baloo' ID to '.font-baloo' class name
+                   ------------------------------------------------------------- */
+                return 'font-baloo';
             default:
                 return 'font-default';
         }
@@ -491,6 +555,19 @@ export default {
                 return 'Noto Sans Arabic';
             case 'silkscreen':
                 return 'Silkscreen';
+            case 'retrotech':
+                return 'RETROTECH';
+            case 'kitty':
+                return 'Kitty';
+            case 'inter':
+                return 'Inter';
+            case 'proxima':
+                return 'Proxima Nova';
+            case 'baloo':
+                /* -------------------------------------------------------------
+                   Map internal 'baloo' ID to the CSS font-family name
+                   ------------------------------------------------------------- */
+                return 'Baloo Bhaijaan 2';
             default:
                 // Return null when no specific font is selected, so callers that
                 // respect a null value (e.g. _preProcessAssContent) won't override
