@@ -340,44 +340,7 @@ export class VirtualCardRow {
          * stays exactly where the user left it.
          */
         const scrollToIndex = (targetIndex) => {
-            const isRtl = document.documentElement.dir === 'rtl';
-            const clamped = Math.max(0, Math.min(this.totalItems - 1, targetIndex));
-
-            // Update virtual window so the target cards are in the DOM
-            this.currentIndex = clamped;
-            this._updateWindow(this.currentIndex);
-
-            // Compute the scroll offset (mirrors ScrollController logic exactly)
-            const elementPos   = this.getItemPosition(clamped);
-            
-            // -----------------------------------------------------------------
-            // Card Centering Geometry (Expanded Posters)
-            // -----------------------------------------------------------------
-            // If we are running the modern layout and the cards can expand,
-            // we center the card based on its EXPANDED width (600px).
-            // This prevents the card's right boundary from clipping and centers
-            // the expanded card perfectly in the middle of the viewport.
-            // -----------------------------------------------------------------
-            const isModern = document.documentElement.getAttribute('data-layout') === 'modern';
-            const canExpand = isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
-            const elementWidth = canExpand ? 600 : this.itemWidth;
-
-            const containerWidth = this.track.parentElement
-                ? this.track.parentElement.clientWidth
-                : window.innerWidth;
-            const trackWidth   = this.getTrackWidth();
-
-            const targetScroll   = elementPos - containerWidth / 2 + elementWidth / 2;
-            const maxScroll      = Math.max(0, trackWidth - containerWidth);
-            const finalScrollLeft = Math.max(0, Math.min(targetScroll, maxScroll));
-
-            // Apply smooth CSS transition — same transition the track CSS already has
-            const transformValue = isRtl
-                ? `translate3d(${finalScrollLeft}px, 0, 0)`
-                : `translate3d(-${finalScrollLeft}px, 0, 0)`;
-
-            this.track.style.webkitTransform = transformValue;
-            this.track.style.transform       = transformValue;
+            this.centerOnIndex(targetIndex);
         };
 
         leftBtn.addEventListener('click', (e) => {
@@ -607,6 +570,40 @@ export class VirtualCardRow {
         if (this.totalItems === 0) return null;
         this.currentIndex = Math.max(0, Math.min(this.totalItems - 1, index));
         this._updateWindow(this.currentIndex);
+        return this.domNodes.get(this.currentIndex);
+    }
+
+    /**
+     * Center a virtual item in the row without moving focus.
+     * Useful for default row positioning where focus should stay in the hero/actions.
+     * @param {number} index - Absolute item index to center.
+     * @returns {HTMLElement|null} Rendered node for the centered item.
+     */
+    centerOnIndex(index) {
+        if (this.totalItems === 0) return null;
+
+        const isRtl = document.documentElement.dir === 'rtl';
+        const clamped = Math.max(0, Math.min(this.totalItems - 1, index));
+
+        this.currentIndex = clamped;
+        this._updateWindow(this.currentIndex);
+
+        const elementPos = this.getItemPosition(clamped);
+        const isModern = document.documentElement.getAttribute('data-layout') === 'modern';
+        const canExpand =
+            isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
+        const elementWidth = canExpand ? 600 : this.itemWidth;
+        const containerWidth = this.track.parentElement ? this.track.parentElement.clientWidth : window.innerWidth;
+        const trackWidth = this.getTrackWidth();
+        const targetScroll = elementPos - containerWidth / 2 + elementWidth / 2;
+        const maxScroll = Math.max(0, trackWidth - containerWidth);
+        const finalScrollLeft = Math.max(0, Math.min(targetScroll, maxScroll));
+        const transformValue = isRtl
+            ? `translate3d(${finalScrollLeft}px, 0, 0)`
+            : `translate3d(-${finalScrollLeft}px, 0, 0)`;
+
+        this.track.style.webkitTransform = transformValue;
+        this.track.style.transform = transformValue;
         return this.domNodes.get(this.currentIndex);
     }
 

@@ -726,8 +726,27 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
 }
 
 .media-card.current-item-card {
-    border-color: var(--jf-accent) !important;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18) inset, 0 0 18px rgba(0, 164, 220, 0.35);
+    border-color: rgba(255, 209, 102, 0.9) !important;
+    border-radius: var(--jf-border-radius);
+    -webkit-border-radius: var(--jf-border-radius);
+    background: rgba(255, 209, 102, 0.08);
+    box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.35);
+    z-index: 2;
+}
+
+.media-card.current-item-card:not(:focus):not(.focused) {
+    -webkit-transform: scale(1.025);
+    transform: scale(1.025);
+}
+
+.media-card.current-item-card .card-image {
+    border-color: rgba(255, 209, 102, 0.9);
+}
+
+.media-card.current-item-card:focus,
+.media-card.current-item-card.focused {
+    border-color: var(--jf-button-border-focus) !important;
+    box-shadow: 0 0 0 2px rgba(255, 209, 102, 0.45);
 }
 
 /* See More Button Container */

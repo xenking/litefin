@@ -2859,6 +2859,8 @@ class DetailsPage extends Page {
     }
 
     _renderMoreFromSeason(episodes) {
+        const currentEpisodeIndex = episodes.findIndex((ep) => ep.Id === this._itemId);
+
         this._renderVirtualRow({
             sectionId: 'more-from-season-section',
             listId: 'more-from-season-row',
@@ -2883,6 +2885,13 @@ class DetailsPage extends Page {
             },
             focusSectionName: 'more-from-season-section'
         });
+
+        if (currentEpisodeIndex >= 0) {
+            requestAnimationFrame(() => {
+                const virtualRow = this._virtualRows?.['more-from-season-section'];
+                virtualRow?.centerOnIndex(currentEpisodeIndex);
+            });
+        }
     }
 
     async _loadGuestStars() {
