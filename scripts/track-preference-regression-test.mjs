@@ -162,32 +162,14 @@ globalThis.localStorage = {
         itemId: 'friends-s06e01',
         mediaSource: friendsS06E01MediaSource,
         authToken: 'token',
-        audioStreamIndex: 2
+        audioStreamIndex: 2,
+        forceServerSelectedAudio: true
     });
 
     assert.match(
         streamInfo.url,
         /Static=false/,
-        'explicit non-default audio fallback must not use raw Static=true MKV'
-    );
-
-    const streamInfoWithoutDefault = MediaHelper.buildStreamUrl({
-        serverUrl: 'https://jellyfin.example',
-        itemId: 'friends-s06e01',
-        mediaSource: {
-            Id: 'friends-s06e01',
-            Container: 'mkv',
-            SupportsDirectPlay: true,
-            SupportsDirectStream: true
-        },
-        authToken: 'token',
-        audioStreamIndex: 2
-    });
-
-    assert.match(
-        streamInfoWithoutDefault.url,
-        /Static=false/,
-        'explicit audio selection with unknown default must not use raw Static=true MKV'
+        'forced DTS audio fallback must not use raw Static=true MKV'
     );
 
     const streamInfoWithRewrittenDefault = MediaHelper.buildStreamUrl({
@@ -234,6 +216,31 @@ globalThis.localStorage = {
         streamInfoWithSelectedSingleReturnedAudio.url,
         /Static=false/,
         'caller force must override single-audio PlaybackInfo result after default rewrite'
+    );
+
+    const animeAacStreamInfo = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'jjk-s01e07',
+        mediaSource: {
+            Id: 'jjk-s01e07',
+            Container: 'mkv',
+            SupportsDirectPlay: true,
+            SupportsDirectStream: true,
+            DefaultAudioStreamIndex: 1,
+            MediaStreams: [
+                { Type: 'Video', Index: 0, Codec: 'h264' },
+                { Type: 'Audio', Index: 1, Language: 'eng', Codec: 'aac', IsDefault: true },
+                { Type: 'Audio', Index: 2, Language: 'jpn', Codec: 'aac', IsDefault: false }
+            ]
+        },
+        authToken: 'token',
+        audioStreamIndex: 2
+    });
+
+    assert.match(
+        animeAacStreamInfo.url,
+        /Static=true/,
+        'ordinary multi-audio AAC anime should keep raw Static=true DirectPlay'
     );
 }
 

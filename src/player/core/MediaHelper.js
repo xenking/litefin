@@ -35,14 +35,7 @@ export const MediaHelper = {
 
         let url;
         let isHls = false;
-        const audioStreams = mediaSource?.MediaStreams?.filter((s) => String(s.Type).toLowerCase() === 'audio') || [];
-        const selectedAudioIndex = audioStreamIndex !== undefined && audioStreamIndex !== null
-            ? Number(audioStreamIndex)
-            : undefined;
-        const hasAudioStreamSelection = Number.isFinite(selectedAudioIndex);
-        const mayContainMultipleAudioStreams = audioStreams.length !== 1;
-        const needsServerSelectedAudioStream = Boolean(forceServerSelectedAudio) ||
-            (hasAudioStreamSelection && mayContainMultipleAudioStreams);
+        const needsServerSelectedAudioStream = Boolean(forceServerSelectedAudio);
 
         if (playMethod === 'DirectPlay' || playMethod === 'DirectStream') {
             // ================================================================
@@ -154,12 +147,11 @@ export const MediaHelper = {
             } else if (mediaSource.SupportsDirectStream) {
                 // Static=true serves the original container as-is. Jellyfin does
                 // NOT strip/select audio tracks for this path; AudioStreamIndex is
-                // only metadata on the URL. Therefore Static=true is only safe
-                // when there is no explicit audio selection, or the server proved the
-                // selected stream is the only audio stream in the delivered source.
-                // Multi-audio and unknown-audio sources must not use Static=true;
-                // if PlaybackInfo did not provide a TranscodingUrl, Static=false is
-                // the last fallback because at least it applies AudioStreamIndex.
+                // only metadata on the URL. Do not disable Static=true just because
+                // an AudioStreamIndex is present: ordinary multi-audio AAC anime works
+                // via native audioTracks on WebOS. Only callers that already proved an
+                // unsupported selected audio codec (DTS/TrueHD) may force the server-
+                // selected fallback/remux path.
                 url = `${serverUrl}/Videos/${itemId}/stream.${mediaSource.Container}`;
                 url += needsServerSelectedAudioStream ? `?Static=false` : `?Static=true`;
                 url += `&mediaSourceId=${encodeURIComponent(mediaSource.Id)}`;
