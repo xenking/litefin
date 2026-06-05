@@ -95,7 +95,7 @@ globalThis.localStorage = {
 }
 
 {
-    const { resolveAudioOutputIndex } = await import('../src/player/core/AudioTrackMapper.js');
+    const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } = await import('../src/player/core/AudioTrackMapper.js');
     const mediaSource = {
         MediaStreams: [
             { Type: 'Video', Index: 0 },
@@ -127,6 +127,37 @@ globalThis.localStorage = {
         0,
         'server-selected HLS audio should keep the only output track enabled'
     );
+
+    const trueHdHiddenMediaSource = {
+        MediaStreams: [
+            { Type: 'Video', Index: 0 },
+            { Type: 'Audio', Index: 1, Language: 'eng', Codec: 'truehd' },
+            { Type: 'Audio', Index: 2, Language: 'eng', Codec: 'ac3' },
+            { Type: 'Audio', Index: 3, Language: 'jpn', Codec: 'ac3' }
+        ]
+    };
+
+    assert.equal(
+        resolveBackendAudioTrackListIndex({
+            audioStreamIndex: 2,
+            mediaSource: trueHdHiddenMediaSource,
+            backendType: 'webos',
+            enableTrueHd: false
+        }),
+        0,
+        'webOS native track index should skip hidden disabled TrueHD track'
+    );
+
+    assert.equal(
+        resolveBackendAudioTrackListIndex({
+            audioStreamIndex: 2,
+            mediaSource: trueHdHiddenMediaSource,
+            backendType: 'webos',
+            enableTrueHd: true
+        }),
+        1,
+        'webOS native track index should keep TrueHD in the list when passthrough is enabled'
+    );
 }
 
 {
@@ -156,7 +187,38 @@ globalThis.localStorage = {
         'stale UserData audio preference should be ignored after media replacement/rescan'
     );
 
+    const { shouldForceServerSelectedAudio } = await import('../src/player/core/AudioFallbackPolicy.js');
     const { MediaHelper } = await import('../src/player/core/MediaHelper.js');
+    assert.equal(
+        shouldForceServerSelectedAudio({
+            selectedAudioCodec: 'dts',
+            originalAudioStreamCount: 2,
+            enableTrueHd: true
+        }),
+        true,
+        'multi-audio DTS should still force server-selected audio fallback'
+    );
+
+    assert.equal(
+        shouldForceServerSelectedAudio({
+            selectedAudioCodec: 'truehd',
+            originalAudioStreamCount: 2,
+            enableTrueHd: true
+        }),
+        false,
+        'TrueHD passthrough enabled should not force audio transcode/remux'
+    );
+
+    assert.equal(
+        shouldForceServerSelectedAudio({
+            selectedAudioCodec: 'truehd',
+            originalAudioStreamCount: 2,
+            enableTrueHd: false
+        }),
+        true,
+        'TrueHD passthrough disabled should force server-selected audio fallback'
+    );
+
     const streamInfo = MediaHelper.buildStreamUrl({
         serverUrl: 'https://jellyfin.example',
         itemId: 'friends-s06e01',
@@ -216,6 +278,32 @@ globalThis.localStorage = {
         streamInfoWithSelectedSingleReturnedAudio.url,
         /Static=false/,
         'caller force must override single-audio PlaybackInfo result after default rewrite'
+    );
+
+    const trueHdPassthroughStreamInfo = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'truehd-movie',
+        mediaSource: {
+            Id: 'truehd-movie',
+            Container: 'mkv',
+            SupportsDirectPlay: true,
+            SupportsDirectStream: true,
+            DefaultAudioStreamIndex: 1,
+            MediaStreams: [
+                { Type: 'Video', Index: 0, Codec: 'hevc' },
+                { Type: 'Audio', Index: 1, Language: 'eng', Codec: 'ac3', IsDefault: true },
+                { Type: 'Audio', Index: 2, Language: 'eng', Codec: 'truehd', IsDefault: false }
+            ]
+        },
+        authToken: 'token',
+        audioStreamIndex: 2,
+        forceServerSelectedAudio: false
+    });
+
+    assert.match(
+        trueHdPassthroughStreamInfo.url,
+        /Static=true/,
+        'TrueHD passthrough path should keep raw Static=true DirectPlay when not forced'
     );
 
     const animeAacStreamInfo = MediaHelper.buildStreamUrl({

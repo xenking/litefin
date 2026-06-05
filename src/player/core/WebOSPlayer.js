@@ -490,11 +490,9 @@ export class WebOSPlayer {
                 playMethod === 'DirectStream'
             );
 
-            // Convert Jellyfin stream index (e.g. 1) to 0-based audio-only list index (e.g. 0)
-            // so it maps correctly onto hls.audioTracks / video.audioTracks arrays.
-            const audioStreams = (options.mediaSource?.MediaStreams || []).filter(s => s.Type === 'Audio');
-            const listIndex = audioStreams.findIndex(s => s.Index === options.audioStreamIndex);
-            const resolvedIndex = listIndex >= 0 ? listIndex : 0;
+            // JellyfinPlayer precomputes the backend-visible list index because
+            // WebOS may hide unsupported passthrough tracks from audioTracks.
+            const resolvedIndex = options.audioTrackListIndex >= 0 ? options.audioTrackListIndex : 0;
 
             // For Jellyfin-generated HLS transcode/direct-stream sessions the requested
             // AudioStreamIndex is already baked into the manifest/segments by the server.

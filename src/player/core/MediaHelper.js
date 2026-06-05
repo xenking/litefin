@@ -149,8 +149,8 @@ export const MediaHelper = {
                 // NOT strip/select audio tracks for this path; AudioStreamIndex is
                 // only metadata on the URL. Do not disable Static=true just because
                 // an AudioStreamIndex is present: ordinary multi-audio AAC anime works
-                // via native audioTracks on WebOS. Only callers that already proved an
-                // unsupported selected audio codec (DTS/TrueHD) may force the server-
+                // via native audioTracks on WebOS. Only callers that already proved
+                // the selected audio needs server handling may force the server-
                 // selected fallback/remux path.
                 url = `${serverUrl}/Videos/${itemId}/stream.${mediaSource.Container}`;
                 url += needsServerSelectedAudioStream ? `?Static=false` : `?Static=true`;

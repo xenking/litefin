@@ -17,6 +17,8 @@ import { TizenAVPlayer } from './TizenAVPlayer.js';
 import { WebOSPlayer } from './WebOSPlayer.js';
 import { platformInfo } from '../../utils/PlatformInfo.js';
 import { MediaHelper } from './MediaHelper.js';
+import { shouldForceServerSelectedAudio } from './AudioFallbackPolicy.js';
+import { resolveBackendAudioTrackListIndex, getBackendVisibleAudioStreams } from './AudioTrackMapper.js';
 import { buildJellyfinProfile } from '../../api/DeviceProfile.js';
 import SubtitleManager, { DeliveryMethod } from './SubtitleManager.js';
 import { logger } from '../../utils/Logger.js';
@@ -562,11 +564,12 @@ export class JellyfinPlayer extends EventEmitter {
                 log.info(`[AudioSelection] Requested: ${reqIndex}, Default: ${defaultIndex}, First: ${firstAudioIndex}, Custom: ${isCustomAudioTrack}, IsFirst: ${isFirstAudioTrack}, Codec: ${selectedOriginalAudioCodec}`);
             }
 
-            const isLosslessOrPassthroughAudio = selectedOriginalAudioCodec.includes('dts') ||
-                selectedOriginalAudioCodec === 'dca' ||
-                selectedOriginalAudioCodec === 'truehd';
-            const needsDirectStreamForAudio = options._forceDirectStream ||
-                (originalAudioStreamCount > 1 && isLosslessOrPassthroughAudio);
+            const needsDirectStreamForAudio = shouldForceServerSelectedAudio({
+                selectedAudioCodec: selectedOriginalAudioCodec,
+                originalAudioStreamCount,
+                forceDirectStream: options._forceDirectStream,
+                enableTrueHd: PlayerSettings.get('enableTrueHd')
+            });
 
             // Determine effective playback mode for profiling
             let profilePlaybackMode = this._playbackMode;
@@ -1059,8 +1062,8 @@ export class JellyfinPlayer extends EventEmitter {
                 // has this baked in and this param is unused.
                 audioStreamIndex: this._currentAudioStreamIndex,
                 // Only force server-selected audio for codecs that cannot be
-                // locally switched/passed through safely (DTS/TrueHD). Ordinary
-                // AAC multi-audio must keep Static=true DirectPlay.
+                // locally switched/passed through safely. DTS/DCA stays on the
+                // server-audio path; TrueHD may use raw passthrough when enabled.
                 forceServerSelectedAudio
             });
 
@@ -1090,6 +1093,7 @@ export class JellyfinPlayer extends EventEmitter {
                 mediaSource,
                 startPositionTicks: streamInfo.playerStartPositionTicks, // Use adjusted start position
                 audioStreamIndex: this._currentAudioStreamIndex,
+                audioTrackListIndex: this._getBackendAudioTrackListIndex(this._currentAudioStreamIndex, mediaSource),
                 subtitleStreamIndex: options.subtitleStreamIndex,
                 // Tell the backend what play method was negotiated — critical so
                 // TizenAVPlayer knows NOT to apply native track selection when
@@ -1401,11 +1405,11 @@ export class JellyfinPlayer extends EventEmitter {
         // DirectPlay: native backend audio switching (no restart needed)
         // =====================================================================
 
-        // Both Tizen (AVPlay) and HtmlVideoPlayer work with 0-based list
-        // indices of available audio tracks, NOT the raw Jellyfin stream ID.
-        // Convert here so both backends share the same simple interface.
-        const tracks = this.getAudioTracks();
-        const listIndex = tracks.findIndex((t) => t.Index === index);
+        // Backends work with 0-based visible audio-track list indices, NOT raw
+        // Jellyfin stream IDs. WebOS may hide unsupported passthrough tracks,
+        // so compute the index from the backend-visible list.
+        const tracks = this._getBackendAudioTracks();
+        const listIndex = this._getBackendAudioTrackListIndex(index);
 
         if (listIndex === -1) {
             log.warn('StreamID', index, 'not found in audio tracks:', tracks.map(t => t.Index));
@@ -1874,6 +1878,38 @@ export class JellyfinPlayer extends EventEmitter {
     }
 
     /**
+     * Get audio tracks expected to be visible/selectable to the active backend.
+     * @param {Object} [mediaSource]
+     * @returns {Array}
+     * @private
+     */
+    _getBackendAudioTracks(mediaSource = this._currentMediaSource) {
+        return getBackendVisibleAudioStreams({
+            mediaSource,
+            backendType: this._backendType,
+            enableDts: PlayerSettings.get('enableDts'),
+            enableTrueHd: PlayerSettings.get('enableTrueHd')
+        });
+    }
+
+    /**
+     * Convert a Jellyfin audio stream Index to the backend-visible 0-based index.
+     * @param {number} streamIndex
+     * @param {Object} [mediaSource]
+     * @returns {number}
+     * @private
+     */
+    _getBackendAudioTrackListIndex(streamIndex, mediaSource = this._currentMediaSource) {
+        return resolveBackendAudioTrackListIndex({
+            audioStreamIndex: streamIndex,
+            mediaSource,
+            backendType: this._backendType,
+            enableDts: PlayerSettings.get('enableDts'),
+            enableTrueHd: PlayerSettings.get('enableTrueHd')
+        });
+    }
+
+    /**
      * Get available subtitle tracks
      * @returns {Array} Subtitle streams
      */
@@ -2192,8 +2228,8 @@ export class JellyfinPlayer extends EventEmitter {
                 // EnableTranscoding must be true for Jellyfin to process a Remux stream
                 requestBody.EnableTranscoding = true;
                 requestBody.AllowVideoStreamCopy = true;
-                // For unsupported selected audio (DTS/TrueHD on WebOS), force only
-                // the audio through transcoding while preserving video copy.
+                // For server-selected fallback audio, force only the audio
+                // through transcoding while preserving video copy.
                 requestBody.AllowAudioStreamCopy = !this._forceAudioOnlyRemux;
                 
                 // Clear ALL codec limits to prevent "VideoBitDepthNotSupported" etc which block generic remux
