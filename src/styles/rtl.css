@@ -322,6 +322,11 @@
     text-align: right;
 }
 
+[dir="rtl"] .track-meta-chip.active::before {
+    margin-right: 0;
+    margin-left: 6px;
+}
+
 [dir="rtl"] .meta-value-list {
     direction: ltr;
     justify-content: flex-end;

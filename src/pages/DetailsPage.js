@@ -55,6 +55,7 @@ class DetailsPage extends Page {
         this._selectedMediaSourceId = null;
         this._selectedAudioIndex = undefined;
         this._selectedSubtitleIndex = undefined;
+        this._isTrackMetaActive = false;
 
         // Mark as async page for Navigation State
         this._isAsyncPage = true;
@@ -150,6 +151,11 @@ class DetailsPage extends Page {
                         </div>
                     </div>
                     
+                    <!-- Inline Track Metadata (episode audio/subtitle quick selection) -->
+                    <div id="inline-track-meta-container" class="media-row hidden">
+                        <div class="details-rich-meta details-track-meta" id="inline-track-meta" tabindex="0"></div>
+                    </div>
+
                     <!-- Rich Metadata (Genres, People, Studios, Tags) -->
                     <div id="rich-meta-container" class="media-row">
                         <div class="details-rich-meta" id="rich-meta" tabindex="0"></div>
@@ -501,7 +507,9 @@ class DetailsPage extends Page {
             // 2. Render all text content immediately (Metadata, Hero Info)
             this._renderHeroText();
             this._setupFavoriteButton();
+            this._positionEpisodeMetadataBlocks();
             this._renderRichMetadata();
+            this._renderInlineTrackMetadata();
 
             // Show/hide the trailer button based on what the item exposes.
             // We can do this immediately — both LocalTrailerCount and RemoteTrailers
@@ -631,6 +639,7 @@ class DetailsPage extends Page {
             // Reset track selections when version changes as they are source-specific
             this._selectedAudioIndex = undefined;
             this._selectedSubtitleIndex = undefined;
+            this._renderInlineTrackMetadata();
         });
     }
 
@@ -1064,24 +1073,7 @@ class DetailsPage extends Page {
      */
     _rebuildNavigationChain() {
         // Get all registered sections and rebuild their leaveUp/leaveDown links
-        const sectionOrder = [
-            'details-actions',
-            'details-see-more',
-            'details-rich-meta',
-            'collection-movies-section',
-            'collection-shows-section',
-            'details-playlist-items', // Playlist items grid (Playlist type)
-            'details-next-up',
-            'details-seasons',
-            'details-episodes',
-            'details-songs',
-            'more-from-season-section',
-            'details-people',
-            'details-special-features',
-            'artists-section',
-            'guest-stars-section',
-            'details-similar'
-        ];
+        const sectionOrder = this._getDetailsSectionOrder();
 
         // For each section that exists, update its links
         for (const sectionName of sectionOrder) {
@@ -1338,6 +1330,246 @@ class DetailsPage extends Page {
             focusSectionName: sectionId,
             leaveUpTarget: leaveUpTarget || 'details-rich-meta'
         });
+    }
+
+    _positionEpisodeMetadataBlocks() {
+        const richWrapper = this.$('#rich-meta-container');
+        const inlineWrapper = this.$('#inline-track-meta-container');
+        const moreFromSeason = this.$('#more-from-season-section');
+        const people = this.$('#people-section');
+
+        if (!richWrapper || !inlineWrapper) return;
+
+        if (this._item?.Type === 'Episode') {
+            if (moreFromSeason?.parentNode && people) {
+                moreFromSeason.parentNode.insertBefore(richWrapper, people);
+            }
+        } else if (inlineWrapper.parentNode) {
+            // Restore default layout for non-episode DetailsPage instances reused by navigation.
+            inlineWrapper.parentNode.insertBefore(richWrapper, inlineWrapper.nextSibling);
+        }
+    }
+
+    _getSelectedMediaSource() {
+        return (
+            this._item?.MediaSources?.find((m) => m.Id === this._selectedMediaSourceId) ||
+            this._item?.MediaSources?.[0] ||
+            null
+        );
+    }
+
+    _getSelectableAudioTracks(mediaSource) {
+        return (mediaSource?.MediaStreams || []).filter((s) => s.Type === 'Audio');
+    }
+
+    _getSelectableSubtitleTracks(mediaSource) {
+        const disablePgs = PlayerSettings.get('pgsPlaybackMode') === 'disable';
+        return (mediaSource?.MediaStreams || []).filter((s) => {
+            if (s.Type !== 'Subtitle') return false;
+            if (!disablePgs) return true;
+
+            const codec = (s.Codec || '').toLowerCase();
+            return codec !== 'pgs' && codec !== 'pgssub';
+        });
+    }
+
+    _getCurrentAudioIndex(mediaSource, tracks) {
+        if (this._selectedAudioIndex !== undefined) return this._selectedAudioIndex;
+
+        const defaultIndex = mediaSource?.DefaultAudioStreamIndex;
+        if (defaultIndex !== undefined && defaultIndex !== null && tracks.some((s) => s.Index === defaultIndex)) {
+            return defaultIndex;
+        }
+
+        return tracks[0]?.Index;
+    }
+
+    _getCurrentSubtitleIndex(mediaSource) {
+        if (this._selectedSubtitleIndex !== undefined) return this._selectedSubtitleIndex;
+
+        const defaultIndex = mediaSource?.DefaultSubtitleStreamIndex;
+        return defaultIndex === undefined || defaultIndex === null ? -1 : defaultIndex;
+    }
+
+    _formatTrackChipLabel(track, fallback) {
+        if (!track) return fallback;
+        if (track.Index === -1) return track.DisplayTitle || track.Title || fallback;
+
+        const label = track.DisplayTitle || track.Title || track.Language || fallback;
+        const badges = [];
+        if (track.Codec) badges.push(track.Codec.toUpperCase());
+        if (track.Type === 'Subtitle') badges.push(track.IsExternal ? 'EXT' : 'INT');
+        if (track.Type === 'Audio' && track.Channels) badges.push(`${track.Channels}ch`);
+
+        return `${label}${badges.length ? ` · ${badges.join(' · ')}` : ''}`;
+    }
+
+    _renderInlineTrackMetadata() {
+        const wrapper = this.$('#inline-track-meta-container');
+        const container = this.$('#inline-track-meta');
+        if (!wrapper || !container) return;
+
+        if (this._item?.Type !== 'Episode') {
+            container.innerHTML = '';
+            wrapper.classList.add('hidden');
+            return;
+        }
+
+        const mediaSource = this._getSelectedMediaSource();
+        const audioTracks = this._getSelectableAudioTracks(mediaSource);
+        const subtitleTracks = this._getSelectableSubtitleTracks(mediaSource);
+        const currentAudioIndex = this._getCurrentAudioIndex(mediaSource, audioTracks);
+        const currentSubtitleIndex = this._getCurrentSubtitleIndex(mediaSource);
+
+        const rows = [];
+        const createTrackRow = (label, kind, tracks, currentIndex) => {
+            if (!tracks || tracks.length === 0) return '';
+
+            const chips = tracks
+                .map((track, i) => {
+                    const index = track.Index;
+                    const selected = index === currentIndex;
+                    const chipLabel = this._formatTrackChipLabel(track, i18n.t('TrackIndex', [index]));
+
+                    return `<button class="meta-chip track-meta-chip ${selected ? 'active' : ''}" tabindex="-1" data-track-kind="${kind}" data-index="${index}">${chipLabel}</button>`;
+                })
+                .join('');
+
+            return `
+                <div class="rich-meta-row track-meta-row" data-track-kind="${kind}">
+                    <div class="meta-label">${label}</div>
+                    <div class="meta-value-list">${chips}</div>
+                </div>
+            `;
+        };
+
+        rows.push(createTrackRow(i18n.t('Audio') || 'Audio', 'audio', audioTracks, currentAudioIndex));
+        rows.push(
+            createTrackRow(
+                i18n.t('Subtitles') || 'Subtitles',
+                'subtitle',
+                [{ Index: -1, Type: 'Subtitle', DisplayTitle: i18n.t('Off') || 'Off' }, ...subtitleTracks],
+                currentSubtitleIndex
+            )
+        );
+
+        const html = rows.filter(Boolean).join('');
+        container.innerHTML = html;
+
+        if (!html) {
+            wrapper.classList.add('hidden');
+            return;
+        }
+
+        wrapper.classList.remove('hidden');
+        container.setAttribute('tabindex', '0');
+        container.classList.add('focusable');
+
+        const selectChip = (chip) => {
+            const kind = chip.dataset.trackKind;
+            const index = Number(chip.dataset.index);
+
+            if (kind === 'audio') {
+                if (this._selectedAudioIndex === index) return;
+                this._selectedAudioIndex = index;
+                log.info('Selected Audio Index:', index);
+            } else if (kind === 'subtitle') {
+                if (this._selectedSubtitleIndex === index) return;
+                this._selectedSubtitleIndex = index;
+                log.info('Selected Subtitle Index:', index);
+            }
+
+            const row = chip.closest('.track-meta-row');
+            row?.querySelectorAll('.track-meta-chip').forEach((btn) => btn.classList.toggle('active', btn === chip));
+        };
+
+        container.onclick = (e) => {
+            const chip = e.target.closest('.track-meta-chip');
+            if (chip) {
+                e.preventDefault();
+                e.stopPropagation();
+                selectChip(chip);
+                return;
+            }
+            this._activateTrackMeta();
+        };
+
+        container.onkeydown = (e) => {
+            if (e.keyCode !== 13) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._activateTrackMeta();
+        };
+
+        container.querySelectorAll('.track-meta-chip').forEach((chip) => {
+            chip.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                selectChip(chip);
+            };
+            chip.onkeydown = (e) => {
+                if (e.keyCode !== 13) return;
+                e.preventDefault();
+                e.stopPropagation();
+                selectChip(chip);
+            };
+        });
+
+        const upwardLink = this._getPreviousVisibleSection('details-track-meta')?.targetName || 'details-actions';
+        const nextSection = this._getNextVisibleSection('details-track-meta');
+
+        this.registerFocusSection('details-track-meta', wrapper, {
+            orientation: 'vertical',
+            leaveUp: upwardLink,
+            leaveDown: nextSection ? nextSection.targetName : null,
+            leaveLeft: 'sidebar',
+            enterTo: 'first'
+        });
+
+        this._updateLeaveDown(upwardLink, 'details-track-meta');
+    }
+
+    _activateTrackMeta() {
+        if (this._isTrackMetaActive) return;
+
+        const container = this.$('#inline-track-meta');
+        if (!container) return;
+
+        this._isTrackMetaActive = true;
+        container.classList.add('active-table');
+
+        const chips = container.querySelectorAll('.track-meta-chip');
+        chips.forEach((chip) => chip.setAttribute('tabindex', '0'));
+        container.setAttribute('tabindex', '-1');
+
+        requestAnimationFrame(() => {
+            const validChips = container.querySelectorAll('.track-meta-chip');
+            if (validChips.length === 0) {
+                this._deactivateTrackMeta();
+                return;
+            }
+
+            focusManager.pushTrap(container, {
+                selector: '.track-meta-chip',
+                orientation: 'grid'
+            });
+            focusManager.focusElement(container.querySelector('.track-meta-chip.active') || validChips[0]);
+        });
+    }
+
+    _deactivateTrackMeta() {
+        if (!this._isTrackMetaActive) return;
+
+        const container = this.$('#inline-track-meta');
+        if (!container) return;
+
+        this._isTrackMetaActive = false;
+        container.classList.remove('active-table');
+        container.querySelectorAll('.track-meta-chip').forEach((chip) => chip.setAttribute('tabindex', '-1'));
+
+        focusManager.popTrap();
+        container.setAttribute('tabindex', '0');
+        focusManager.focusElement(container);
     }
 
     _renderRichMetadata() {
@@ -1615,7 +1847,14 @@ class DetailsPage extends Page {
             return true;
         }
 
-        // 2. Rich Meta Trap
+        // 2. Inline Track Meta Trap
+        if (this._isTrackMetaActive) {
+            log.debug('TrackMeta: Back pressed, exiting trap');
+            this._deactivateTrackMeta();
+            return true;
+        }
+
+        // 3. Rich Meta Trap
         if (this._isRichMetaActive) {
             log.debug('RichMeta: Back pressed, exiting trap');
             this._deactivateRichMeta();
@@ -2450,75 +2689,123 @@ class DetailsPage extends Page {
         }
     }
 
-    _getNextVisibleSection(currentSectionName) {
-        // Helper to check if a section exists and is not hidden
+    _getDetailsSections() {
         const isNotHidden = (id) => {
             const el = this.$(id);
             return el && !el.classList.contains('hidden');
         };
 
-        const sections = [
-            // Actions is always first and visible - needed so we can find what's after it
-            { name: 'details-actions', elementId: '#actions', isVisible: () => true },
-            {
+        return {
+            'details-actions': { name: 'details-actions', elementId: '#actions', isVisible: () => true },
+            'details-see-more': {
                 name: 'details-see-more',
                 elementId: '#details-overview',
                 isVisible: () => this.$('.see-more-btn')?.style?.display !== 'none'
             },
-            { name: 'details-rich-meta', elementId: '#rich-meta', isVisible: () => !!this.$('#rich-meta')?.innerHTML },
-            // Collection rows (BoxSet contents)
-            {
+            'details-track-meta': {
+                name: 'details-track-meta',
+                elementId: '#inline-track-meta',
+                isVisible: () => isNotHidden('#inline-track-meta-container') && !!this.$('#inline-track-meta')?.innerHTML
+            },
+            'details-rich-meta': { name: 'details-rich-meta', elementId: '#rich-meta', isVisible: () => !!this.$('#rich-meta')?.innerHTML },
+            'collection-movies-section': {
                 name: 'collection-movies-section',
                 elementId: '#collection-movies-row',
                 isVisible: () => isNotHidden('#collection-movies-section')
             },
-            {
+            'collection-shows-section': {
                 name: 'collection-shows-section',
                 elementId: '#collection-shows-row',
                 isVisible: () => isNotHidden('#collection-shows-section')
             },
-            // Playlist items — shown when the item is of Type 'Playlist'
-            {
+            'details-playlist-items': {
                 name: 'details-playlist-items',
                 elementId: '#playlist-items-list',
                 isVisible: () => isNotHidden('#playlist-items-section')
             },
-            // Standard content rows
-            { name: 'details-next-up', elementId: '#next-up-row', isVisible: () => isNotHidden('#next-up-section') },
-            { name: 'details-seasons', elementId: '#seasons-row', isVisible: () => isNotHidden('#seasons-section') },
-            {
+            'details-next-up': { name: 'details-next-up', elementId: '#next-up-row', isVisible: () => isNotHidden('#next-up-section') },
+            'details-seasons': { name: 'details-seasons', elementId: '#seasons-row', isVisible: () => isNotHidden('#seasons-section') },
+            'details-episodes': {
                 name: 'details-episodes',
                 elementId: '#episodes-list',
                 isVisible: () => isNotHidden('#episodes-section')
             },
-            {
+            'details-songs': {
                 name: 'details-songs',
                 elementId: '#songs-list',
                 isVisible: () => isNotHidden('#songs-section')
             },
-            {
+            'more-from-season-section': {
                 name: 'more-from-season-section',
                 elementId: '#more-from-season-row',
                 isVisible: () => isNotHidden('#more-from-season-section')
             },
-            { name: 'details-people', elementId: '#people-row', isVisible: () => isNotHidden('#people-section') },
-            {
+            'details-people': { name: 'details-people', elementId: '#people-row', isVisible: () => isNotHidden('#people-section') },
+            'details-special-features': {
                 name: 'details-special-features',
                 elementId: '#special-features-row',
                 isVisible: () => isNotHidden('#special-features-section')
             },
-            {
+            'artists-section': {
                 name: 'artists-section',
                 elementId: '#artists-row',
                 isVisible: () => isNotHidden('#artists-section')
             },
-            {
+            'guest-stars-section': {
                 name: 'guest-stars-section',
                 elementId: '#guest-stars-row',
                 isVisible: () => isNotHidden('#guest-stars-section')
             },
-            { name: 'details-similar', elementId: '#similar-row', isVisible: () => isNotHidden('#similar-section') }
+            'details-similar': { name: 'details-similar', elementId: '#similar-row', isVisible: () => isNotHidden('#similar-section') }
+        };
+    }
+
+    _getDetailsSectionOrder() {
+        const episodeOrder = [
+            'details-actions',
+            'details-see-more',
+            'details-track-meta',
+            'collection-movies-section',
+            'collection-shows-section',
+            'details-playlist-items',
+            'details-next-up',
+            'details-seasons',
+            'details-episodes',
+            'details-songs',
+            'more-from-season-section',
+            'details-rich-meta',
+            'details-people',
+            'details-special-features',
+            'artists-section',
+            'guest-stars-section',
+            'details-similar'
         ];
+
+        const defaultOrder = [
+            'details-actions',
+            'details-see-more',
+            'details-rich-meta',
+            'collection-movies-section',
+            'collection-shows-section',
+            'details-playlist-items',
+            'details-next-up',
+            'details-seasons',
+            'details-episodes',
+            'details-songs',
+            'more-from-season-section',
+            'details-people',
+            'details-special-features',
+            'artists-section',
+            'guest-stars-section',
+            'details-similar'
+        ];
+
+        return this._item?.Type === 'Episode' ? episodeOrder : defaultOrder;
+    }
+
+    _getNextVisibleSection(currentSectionName) {
+        const sectionMap = this._getDetailsSections();
+        const sections = this._getDetailsSectionOrder().map((name) => sectionMap[name]).filter(Boolean);
 
         let foundCurrent = false;
         for (const section of sections) {
@@ -2534,73 +2821,8 @@ class DetailsPage extends Page {
     }
 
     _getPreviousVisibleSection(currentSectionName) {
-        // Helper to check if a section exists and is not hidden
-        const isNotHidden = (id) => {
-            const el = this.$(id);
-            return el && !el.classList.contains('hidden');
-        };
-
-        const sections = [
-            { name: 'details-similar', elementId: '#similar-row', isVisible: () => isNotHidden('#similar-section') },
-            {
-                name: 'guest-stars-section',
-                elementId: '#guest-stars-row',
-                isVisible: () => isNotHidden('#guest-stars-section')
-            },
-            {
-                name: 'artists-section',
-                elementId: '#artists-row',
-                isVisible: () => isNotHidden('#artists-section')
-            },
-            {
-                name: 'details-special-features',
-                elementId: '#special-features-row',
-                isVisible: () => isNotHidden('#special-features-section')
-            },
-            { name: 'details-people', elementId: '#people-row', isVisible: () => isNotHidden('#people-section') },
-            {
-                name: 'more-from-season-section',
-                elementId: '#more-from-season-row',
-                isVisible: () => isNotHidden('#more-from-season-section')
-            },
-            {
-                name: 'details-songs',
-                elementId: '#songs-list',
-                isVisible: () => isNotHidden('#songs-section')
-            },
-            {
-                name: 'details-episodes',
-                elementId: '#episodes-list',
-                isVisible: () => isNotHidden('#episodes-section')
-            },
-            { name: 'details-seasons', elementId: '#seasons-row', isVisible: () => isNotHidden('#seasons-section') },
-            { name: 'details-next-up', elementId: '#next-up-row', isVisible: () => isNotHidden('#next-up-section') },
-            // Playlist items — reverse position mirrors _getNextVisibleSection
-            {
-                name: 'details-playlist-items',
-                elementId: '#playlist-items-list',
-                isVisible: () => isNotHidden('#playlist-items-section')
-            },
-            // Collection rows (BoxSet contents) - in reverse order
-            {
-                name: 'collection-shows-section',
-                elementId: '#collection-shows-row',
-                isVisible: () => isNotHidden('#collection-shows-section')
-            },
-            {
-                name: 'collection-movies-section',
-                elementId: '#collection-movies-row',
-                isVisible: () => isNotHidden('#collection-movies-section')
-            },
-            // Standard
-            { name: 'details-rich-meta', elementId: '#rich-meta', isVisible: () => !!this.$('#rich-meta')?.innerHTML },
-            {
-                name: 'details-see-more',
-                elementId: '#details-overview',
-                isVisible: () => this.$('.see-more-btn')?.style?.display !== 'none'
-            },
-            { name: 'details-actions', elementId: '#actions', isVisible: () => true } // Actions are always visible
-        ];
+        const sectionMap = this._getDetailsSections();
+        const sections = this._getDetailsSectionOrder().map((name) => sectionMap[name]).filter(Boolean).reverse();
 
         let foundCurrent = false;
         for (const section of sections) {
@@ -2622,11 +2844,14 @@ class DetailsPage extends Page {
             const response = await api.getEpisodes(this._item.SeriesId, {
                 SeasonId: this._item.SeasonId
             });
-            // Filter out current episode and limit to 24 for row
-            const siblings = (response.Items || []).filter((ep) => ep.Id !== this._itemId).slice(0, 24);
+            const episodes = response.Items || [];
+            const hasCurrentEpisode = episodes.some((ep) => ep.Id === this._itemId);
+            const seasonEpisodes = hasCurrentEpisode
+                ? episodes
+                : [...episodes, this._item].sort((a, b) => (a.IndexNumber || 0) - (b.IndexNumber || 0));
 
-            if (siblings.length > 0) {
-                this._renderMoreFromSeason(siblings);
+            if (seasonEpisodes.length > 0) {
+                this._renderMoreFromSeason(seasonEpisodes);
             }
         } catch (error) {
             log.warn('Failed to load season episodes', error);
@@ -2648,7 +2873,14 @@ class DetailsPage extends Page {
                             : this._item.SeasonName
                   ])
                 : null,
-            renderCard: (ep) => this._renderMediaCard(ep, true, 'episode'),
+            renderCard: (ep) => {
+                const html = this._renderMediaCard(ep, true, 'episode');
+                if (ep.Id !== this._itemId) return html;
+
+                return html
+                    .replace('<button ', '<button aria-current="true" ')
+                    .replace('class="media-card', 'class="media-card current-item-card');
+            },
             focusSectionName: 'more-from-season-section'
         });
     }
@@ -3004,78 +3236,34 @@ class DetailsPage extends Page {
     }
 
     _showAudioTrackMenu() {
-        const mediaSource =
-            this._item?.MediaSources?.find((m) => m.Id === this._selectedMediaSourceId) ||
-            this._item?.MediaSources?.[0];
+        const mediaSource = this._getSelectedMediaSource();
         if (!mediaSource?.MediaStreams) return;
 
-        const key = 'Audio';
-        const tracks = mediaSource.MediaStreams.filter((s) => s.Type === key);
-
-        // Find current selection (or default)
-        let currentIndex = this._selectedAudioIndex;
-        if (currentIndex === undefined) {
-            const defaultStream = tracks.find((s) => s.Index === this._item.MediaSources[0].DefaultAudioStreamIndex);
-            currentIndex = defaultStream ? defaultStream.Index : tracks[0]?.Index || 0;
-        }
+        const tracks = this._getSelectableAudioTracks(mediaSource);
+        const currentIndex = this._getCurrentAudioIndex(mediaSource, tracks);
 
         this._renderTrackSelectionMenu(i18n.t('Audio'), tracks, currentIndex, (index) => {
             if (this._selectedAudioIndex === index) return;
 
             this._selectedAudioIndex = index;
+            this._renderInlineTrackMetadata();
             log.info('Selected Audio Index:', index);
         });
     }
 
     _showSubtitleTrackMenu() {
-        // Find the selected media source (or default to the first one)
-        const mediaSource =
-            this._item?.MediaSources?.find((m) => m.Id === this._selectedMediaSourceId) ||
-            this._item?.MediaSources?.[0];
-        // Guard check: Ensure media source streams exist
+        const mediaSource = this._getSelectedMediaSource();
         if (!mediaSource?.MediaStreams) return;
 
-        const key = 'Subtitle';
-        
-        // =========================================================================
-        // PGS Subtitle Filter Guard
-        //
-        // If the user has disabled PGS rendering completely in settings ('disable'),
-        // we want to exclude PGS tracks from the list of subtitle tracks that the
-        // user can manually select in the details page subtitle menu.
-        // =========================================================================
-        const disablePgs = PlayerSettings.get('pgsPlaybackMode') === 'disable';
-        const tracks = mediaSource.MediaStreams.filter((s) => {
-            // Match subtitle type
-            if (s.Type !== key) return false;
-            
-            // Skip disabled PGS tracks
-            if (disablePgs) {
-                const codec = (s.Codec || '').toLowerCase();
-                if (codec === 'pgs' || codec === 'pgssub') {
-                    return false;
-                }
-            }
-            return true;
-        });
-
-        // Determine current track selection index
-        let currentIndex = this._selectedSubtitleIndex;
-        if (currentIndex === undefined) {
-            // Fallback to server default track index
-            currentIndex = mediaSource.DefaultSubtitleStreamIndex; // Can be -1/null
-        }
-
-        // Add "Off" option to the selection track list
+        const tracks = this._getSelectableSubtitleTracks(mediaSource);
+        const currentIndex = this._getCurrentSubtitleIndex(mediaSource);
         const displayTracks = [{ Index: -1, DisplayTitle: i18n.t('Off'), Title: i18n.t('Off') }, ...tracks];
 
-        // Render the track selection menu modal on screen
         this._renderTrackSelectionMenu(i18n.t('Subtitles'), displayTracks, currentIndex, (index) => {
-            // Guard check: If selection did not change, skip update
             if (this._selectedSubtitleIndex === index) return;
 
-            // Update local selected index and log the choice
             this._selectedSubtitleIndex = index;
+            this._renderInlineTrackMetadata();
             log.info('Selected Subtitle Index:', index);
         });
     }
