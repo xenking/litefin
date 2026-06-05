@@ -527,10 +527,9 @@ export class JellyfinPlayer extends EventEmitter {
 
             this._playbackMode = options.playbackMode || 'auto';
 
-            // Determine if we need to force a remux for audio tracks on HTML5
-            const isHtml5Backend = !(this._backend instanceof TizenAVPlayer);
-            const supportsNativeAudio = this._backend && typeof this._backend.supportsNativeAudioTracks === 'function' && this._backend.supportsNativeAudioTracks();
-            
+            // Determine if the selected original audio codec must go through
+            // server-side audio-only remux/transcode. Do not force this for AAC;
+            // WebOS can switch ordinary AAC multi-audio via native audioTracks.
             let isCustomAudioTrack = false;
             let isFirstAudioTrack = true;
             let selectedOriginalAudioCodec = '';
@@ -567,8 +566,7 @@ export class JellyfinPlayer extends EventEmitter {
                 selectedOriginalAudioCodec === 'dca' ||
                 selectedOriginalAudioCodec === 'truehd';
             const needsDirectStreamForAudio = options._forceDirectStream ||
-                (originalAudioStreamCount > 1 && isLosslessOrPassthroughAudio) ||
-                (isHtml5Backend && !supportsNativeAudio && (isCustomAudioTrack || !isFirstAudioTrack));
+                (originalAudioStreamCount > 1 && isLosslessOrPassthroughAudio);
 
             // Determine effective playback mode for profiling
             let profilePlaybackMode = this._playbackMode;
@@ -1045,13 +1043,7 @@ export class JellyfinPlayer extends EventEmitter {
                 this._resumeWaitStartTime = Date.now();
             }
 
-            const originalMediaSource = options.item?.MediaSources?.find((ms) => ms.Id === mediaSource.Id) ||
-                options.item?.MediaSources?.[0] ||
-                mediaSource;
-            const originalAudioStreams = (originalMediaSource?.MediaStreams || []).filter((s) => s.Type === 'Audio');
-            const finalAudioIndex = Number(this._currentAudioStreamIndex);
-            const forceServerSelectedAudio = Boolean(isCustomAudioTrack) ||
-                (Number.isFinite(finalAudioIndex) && originalAudioStreams.length > 1);
+            const forceServerSelectedAudio = Boolean(needsDirectStreamForAudio);
 
             // Build stream URL
             const streamInfo = MediaHelper.buildStreamUrl({
@@ -1066,11 +1058,9 @@ export class JellyfinPlayer extends EventEmitter {
                 // When TranscodingUrl is present (the normal case), the server already
                 // has this baked in and this param is unused.
                 audioStreamIndex: this._currentAudioStreamIndex,
-                // forceServerSelectedAudio is calculated from the original item
-                // media source before PlaybackInfo can rewrite DefaultAudioStreamIndex
-                // to the requested track. Static=true ignores AudioStreamIndex, so
-                // force the server-selected stream whenever original media has
-                // multiple audio streams and an index was selected.
+                // Only force server-selected audio for codecs that cannot be
+                // locally switched/passed through safely (DTS/TrueHD). Ordinary
+                // AAC multi-audio must keep Static=true DirectPlay.
                 forceServerSelectedAudio
             });
 
