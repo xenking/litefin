@@ -638,7 +638,7 @@ class Sidebar extends Component {
         
         let outlinePath = '';
         let filledPath = '';
-        let viewBox = '0 0 24 24';
+        const viewBox = '0 0 24 24';
 
         // Precise path configurations for extreme visual sharpness
         switch (colType) {

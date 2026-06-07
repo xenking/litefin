@@ -14,7 +14,6 @@ import { imageService } from '../utils/ImageService.js';
 import MediaGrid from '../components/MediaGrid.js';
 import { i18n } from '../utils/i18n.js';
 import { state } from '../core/StateManager.js';
-import { lazyLoader } from '../utils/LazyLoader.js';
 
 import FavoriteButton from '../components/FavoriteButton.js';
 import BackdropManager from '../utils/BackdropManager.js';

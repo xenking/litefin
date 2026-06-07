@@ -3005,7 +3005,6 @@ class PlayerPage extends Page {
         await new Promise((r) => setTimeout(r, 400));
 
         // Update state for new channel
-        const oldItem = this._item;
         this._item = nextChannel;
         this.title = nextChannel.Name;
         this._resumePosition = 0;

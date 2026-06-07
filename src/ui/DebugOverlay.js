@@ -253,15 +253,15 @@ class DebugOverlay {
     _flushUploadBufferToDOM() {
         if (!this._content || this._uploadBuffer.length === 0) return;
 
-        var fragment = document.createDocumentFragment();
+        const fragment = document.createDocumentFragment();
 
-        for (var i = 0; i < this._uploadBuffer.length; i++) {
-            var line = document.createElement('div');
+        for (let i = 0; i < this._uploadBuffer.length; i++) {
+            const line = document.createElement('div');
             line.style.borderBottom = '1px solid #222';
             line.style.padding = '2px 0';
             line.style.wordBreak = 'break-all';
 
-            var text = this._uploadBuffer[i];
+            const text = this._uploadBuffer[i];
 
             /* Colour-code based on the level string embedded in the buffered line */
             if (text.indexOf('] [ERROR]') !== -1) {

@@ -186,7 +186,7 @@ class AuthManager {
         const serverUrl      = storage.getItem(STORAGE_KEYS.SERVER_URL);
         const flatSessionRaw = storage.getItem(STORAGE_KEYS.SESSIONS);
 
-        let initialMap = {};
+        const initialMap = {};
 
         if (flatSessionRaw && serverUrl) {
             // Existing users: lift the flat sessions array into the server's slot

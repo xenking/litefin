@@ -368,7 +368,7 @@ export function buildJellyfinProfile(options = {}) {
     //   The updated AVPlay properly supports AC3/EAC3 in HLS/TS, so we can request
     //   surround-sound AC3/EAC3 and AVPlay will decode it natively.
     // =========================================================================
-    let transAudioCodecsArr = [];
+    const transAudioCodecsArr = [];
     let transMaxAudioChannels;
 
     if (caps.tizenVersion >= 6) {
@@ -388,7 +388,7 @@ export function buildJellyfinProfile(options = {}) {
 
     let transAudioCodecs = transAudioCodecsArr.join(',');
 
-    let directAudioCodecsArr = ['aac', 'ac3', 'eac3', 'mp3'];
+    const directAudioCodecsArr = ['aac', 'ac3', 'eac3', 'mp3'];
     if (enableDts) directAudioCodecsArr.push('dts', 'dca');
     if (enableTrueHd) directAudioCodecsArr.push('truehd');
     let directAudioCodecs = directAudioCodecsArr.join(',');

@@ -508,8 +508,9 @@ const skipIntroPlugin = {
                  * segment widget variations (intro, outro, recap, etc.).
                  * ====================================================================
                  */
-                if (document.activeElement && el.contains(document.activeElement)) {
-                    document.activeElement.blur();
+                const activeElement = document.activeElement;
+                if (activeElement && activeElement.classList?.contains('skip-intro-btn')) {
+                    activeElement.blur();
                 }
             }
         };

@@ -273,7 +273,7 @@ class FontLoader {
             // log.debug(`ASS fontname map: ${assMap.length} entries`, assMap.map(a => a.original));
         }
 
-        let loadedFonts = [];
+        const loadedFonts = [];
         let attachIndex = 0;
 
         for (const font of fontAttachments) {

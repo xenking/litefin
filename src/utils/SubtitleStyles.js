@@ -6,7 +6,6 @@
  */
 
 import { PlayerSettings } from './PlayerSettings.js';
-import { platformInfo } from './PlatformInfo.js';
 
 /**
  * Convert HEX color to RGBA
