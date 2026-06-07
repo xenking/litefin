@@ -634,32 +634,25 @@ class PlayerPage extends Page {
             this.on('key:pause', () => this._onRemotePause());
             this.on('key:playPause', () => this._onRemotePlayPause());
             this.on('key:stop', () => this._onRemoteStop());
-            this.on('key:next', () => this._onRemoteNext());
-            this.on('key:previous', () => this._onRemotePrevious());
-            this.on('key:channelUp', () => {
-                // Optional LG channel-rocker override: jump chapters during VOD playback.
-                // Keep upstream Live TV channel switching as the fallback.
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.nextChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Up -> next chapter (user preference)');
-                    this._player.nextChapter();
-                    return;
-                }
+            this.on('key:next', (e) => {
+                if (this._handleChannelRockerChapterJump(1, e)) return;
+                if (this._shouldLetChannelEventHandleLiveTv(e)) return;
+                this._onRemoteNext();
+            });
+            this.on('key:previous', (e) => {
+                if (this._handleChannelRockerChapterJump(-1, e)) return;
+                if (this._shouldLetChannelEventHandleLiveTv(e)) return;
+                this._onRemotePrevious();
+            });
+            this.on('key:channelUp', (e) => {
+                // WebOS emits both key:next and key:channelUp for the same physical
+                // channel-rocker key. If key:next already consumed it for chapter
+                // navigation, do not jump twice. Tizen only emits key:channelUp.
+                if (this._handleChannelRockerChapterJump(1, e)) return;
                 this._onRemoteChannelUp();
             });
-            this.on('key:channelDown', () => {
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.previousChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Down -> previous chapter (user preference)');
-                    this._player.previousChapter();
-                    return;
-                }
+            this.on('key:channelDown', (e) => {
+                if (this._handleChannelRockerChapterJump(-1, e)) return;
                 this._onRemoteChannelDown();
             });
 
@@ -2918,6 +2911,49 @@ class PlayerPage extends Page {
     _onRemoteChannelDown() {
         log.info('Remote: Channel Down');
         this._handleChannelChange(-1);
+    }
+
+    _shouldLetChannelEventHandleLiveTv(e) {
+        return this._item?.Type === 'TvChannel' && (e?.keyCode === 33 || e?.keyCode === 34);
+    }
+
+    /**
+     * Handle optional channel-rocker chapter navigation for physical TV keys.
+     * WebOS reports keyCode 33/34 as both next/previous and channelUp/channelDown,
+     * so we mark the original KeyboardEvent after consuming it to avoid double
+     * chapter jumps while still preserving regular queue next/previous fallback.
+     * @param {number} direction 1 for next chapter, -1 for previous chapter
+     * @param {KeyboardEvent} e Raw hardware key event from the platform adapter
+     * @returns {boolean} true if the key was consumed as chapter navigation
+     * @private
+     */
+    _handleChannelRockerChapterJump(direction, e) {
+        if (e?._litefinChannelRockerChapterHandled) {
+            return true;
+        }
+
+        if (!PlayerSettings.get('channelRockerJumpsChapters')
+            || !this._player
+            || this._item?.Type === 'TvChannel'
+            || (this._player.getChapters?.().length || 0) === 0) {
+            return false;
+        }
+
+        if (direction > 0 && typeof this._player.nextChapter === 'function') {
+            log.debug('Channel Up -> next chapter (user preference)');
+            this._player.nextChapter();
+            if (e) e._litefinChannelRockerChapterHandled = true;
+            return true;
+        }
+
+        if (direction < 0 && typeof this._player.previousChapter === 'function') {
+            log.debug('Channel Down -> previous chapter (user preference)');
+            this._player.previousChapter();
+            if (e) e._litefinChannelRockerChapterHandled = true;
+            return true;
+        }
+
+        return false;
     }
 
     async _handleChannelChange(direction) {
