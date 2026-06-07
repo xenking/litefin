@@ -28,7 +28,7 @@ export const MediaHelper = {
      * @returns {Object} Stream info with URL and metadata
      */
     buildStreamUrl(options) {
-        const { serverUrl, itemId, mediaSource, startPositionTicks, playSessionId, authToken, audioStreamIndex, forceServerSelectedAudio } = options;
+        const { serverUrl, itemId, mediaSource, startPositionTicks, playSessionId, authToken, audioStreamIndex, forceServerSelectedAudio, forceVideoCopyHlsVariant } = options;
 
         // Determine play method
         const playMethod = this.getPlayMethod(mediaSource);
@@ -36,6 +36,7 @@ export const MediaHelper = {
         let url;
         let isHls = false;
         const needsServerSelectedAudioStream = Boolean(forceServerSelectedAudio);
+        const needsVideoCopyHlsVariant = Boolean(forceVideoCopyHlsVariant) && needsServerSelectedAudioStream;
 
         if (playMethod === 'DirectPlay' || playMethod === 'DirectStream') {
             // ================================================================
@@ -141,7 +142,10 @@ export const MediaHelper = {
             // baked in.  For DirectPlay, build the static URL directly (TranscodingUrl
             // may be an HLS manifest the native player can't handle).
             } else if (playMethod === 'DirectStream' && mediaSource.TranscodingUrl) {
-                url = serverUrl + mediaSource.TranscodingUrl;
+                const streamPath = needsVideoCopyHlsVariant
+                    ? this.forceVideoCopyHlsVariantUrl(mediaSource.TranscodingUrl)
+                    : mediaSource.TranscodingUrl;
+                url = serverUrl + streamPath;
                 isHls = url.includes('.m3u8');
 
             } else if (mediaSource.SupportsDirectStream) {
@@ -169,7 +173,10 @@ export const MediaHelper = {
             // Prefer the pre-built TranscodingUrl — it has AudioStreamIndex,
             // SubtitleStreamIndex, codec params, etc. already embedded.
             if (mediaSource.TranscodingUrl) {
-                url = serverUrl + mediaSource.TranscodingUrl;
+                const streamPath = needsVideoCopyHlsVariant
+                    ? this.forceVideoCopyHlsVariantUrl(mediaSource.TranscodingUrl)
+                    : mediaSource.TranscodingUrl;
+                url = serverUrl + streamPath;
                 isHls = url.includes('.m3u8') || (mediaSource.TranscodingSubProtocol && mediaSource.TranscodingSubProtocol.toLowerCase() === 'hls');
             } else {
                 // Manual HLS URL fallback
@@ -193,6 +200,43 @@ export const MediaHelper = {
             transcodingOffsetTicks: playMethod === 'Transcode' ? startPositionTicks : 0,
             playerStartPositionTicks: playMethod === 'Transcode' ? 0 : startPositionTicks
         };
+    },
+
+
+    /**
+     * Pin Jellyfin HLS remux playback to the first, video-copy variant.
+     *
+     * Jellyfin's master.m3u8 can advertise several variants with identical
+     * bandwidth/resolution: first one copies HDR/DV HEVC, later ones are SDR
+     * full-video transcodes. Some WebOS native HLS builds pick a later SDR
+     * variant even when the app requested an audio-only fallback, which washes
+     * out HDR and wastes CPU. The first child playlist is the server-selected
+     * video-copy path, so use it directly when the caller already proved the
+     * video stream is direct and only audio needs server handling.
+     *
+     * @param {string} transcodingUrl Jellyfin-provided TranscodingUrl
+     * @returns {string} TranscodingUrl pinned to main.m3u8 when safe
+     */
+    forceVideoCopyHlsVariantUrl(transcodingUrl) {
+        if (!transcodingUrl || !/\/master\.m3u8(?=[?#]|$)/i.test(transcodingUrl)) {
+            return transcodingUrl;
+        }
+
+        if (/[?&]AllowVideoStreamCopy=false(?=&|$)/i.test(transcodingUrl)) {
+            return transcodingUrl;
+        }
+
+        let rewritten = transcodingUrl.replace(/\/master\.m3u8(?=[?#]|$)/i, '/main.m3u8');
+
+        // Jellyfin's first master variant narrows AudioCodec to the actual
+        // transcoded codec (AAC in our WebOS DTS case). Mirror that URL so the
+        // main playlist maps to the same server decision as variant #1.
+        rewritten = rewritten.replace(/([?&]AudioCodec=)([^&#]+)/i, (match, prefix, value) => {
+            const firstCodec = decodeURIComponent(value).split(',')[0]?.trim();
+            return firstCodec ? `${prefix}${encodeURIComponent(firstCodec)}` : match;
+        });
+
+        return rewritten;
     },
 
     /**

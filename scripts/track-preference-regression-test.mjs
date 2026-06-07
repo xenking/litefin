@@ -234,6 +234,73 @@ globalThis.localStorage = {
         'forced DTS audio fallback must not use raw Static=true MKV'
     );
 
+    const forcedHlsAudioFallback = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'friends-s06e02',
+        mediaSource: {
+            Id: 'friends-s06e02',
+            Container: 'mkv',
+            SupportsDirectPlay: false,
+            SupportsDirectStream: false,
+            TranscodingUrl: '/videos/friends-s06e02/master.m3u8?&DeviceId=device&MediaSourceId=friends-s06e02&AudioCodec=aac,ac3,eac3&AudioStreamIndex=2&VideoBitrate=119360000&AudioBitrate=640000&SegmentContainer=ts&hevc-profile=main10&TranscodeReasons=DirectPlayError',
+            MediaStreams: [
+                { Type: 'Video', Index: 0, Codec: 'hevc', Profile: 'Main 10', BitDepth: 10, VideoRangeType: 'DOVIWithHDR10' },
+                { Type: 'Audio', Index: 2, Codec: 'dts', Profile: 'DTS-HD MA', Channels: 6 }
+            ]
+        },
+        authToken: 'token',
+        audioStreamIndex: 2,
+        forceServerSelectedAudio: true,
+        forceVideoCopyHlsVariant: true
+    });
+
+    assert.match(
+        forcedHlsAudioFallback.url,
+        /\/main\.m3u8\?/,
+        'WebOS forced DTS HLS fallback should pin the first video-copy child playlist instead of ABR master'
+    );
+    assert.doesNotMatch(
+        forcedHlsAudioFallback.url,
+        /\/master\.m3u8\?/,
+        'forced DTS HLS fallback must not expose Jellyfin SDR transcode variants from master.m3u8'
+    );
+    assert.match(
+        forcedHlsAudioFallback.url,
+        /[?&]AudioCodec=aac(?=&|$)/,
+        'forced DTS HLS fallback should mirror Jellyfin first variant AAC selection'
+    );
+    assert.doesNotMatch(
+        forcedHlsAudioFallback.url,
+        /AllowVideoStreamCopy=false/,
+        'forced DTS HLS fallback must not choose a full-video transcode variant'
+    );
+
+    const normalHlsDirectStream = MediaHelper.buildStreamUrl({
+        serverUrl: 'https://jellyfin.example',
+        itemId: 'plain-remux',
+        mediaSource: {
+            Id: 'plain-remux',
+            Container: 'mkv',
+            SupportsDirectPlay: false,
+            SupportsDirectStream: false,
+            TranscodingUrl: '/videos/plain-remux/master.m3u8?MediaSourceId=plain-remux&AudioCodec=aac,ac3,eac3&TranscodeReasons=DirectPlayError',
+            MediaStreams: [
+                { Type: 'Video', Index: 0, Codec: 'hevc' },
+                { Type: 'Audio', Index: 1, Codec: 'aac' }
+            ]
+        },
+        authToken: 'token',
+        audioStreamIndex: 1,
+        forceServerSelectedAudio: false,
+        forceVideoCopyHlsVariant: true
+    });
+
+    assert.match(
+        normalHlsDirectStream.url,
+        /\/master\.m3u8\?/,
+        'HLS master rewrite is gated by forced server-selected audio'
+    );
+
     const streamInfoWithRewrittenDefault = MediaHelper.buildStreamUrl({
         serverUrl: 'https://jellyfin.example',
         itemId: 'friends-s06e01',
