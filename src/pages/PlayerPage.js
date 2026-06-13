@@ -35,6 +35,7 @@ import { platformInfo } from '../utils/PlatformInfo.js';
 import { webosAdapter } from '../webos/WebOSAdapter.js';
 import { syncPlayManager } from '../core/syncplay/SyncPlayManager.js';
 import { globalClock } from '../ui/GlobalClock.js';
+import { getChapterAwareSkipAction } from './playerRemoteNavigation.js';
 
 const log = logger.create('Player');
 
@@ -90,6 +91,41 @@ class PlayerPage extends Page {
      */
     get osd() {
         return this._osd;
+    }
+
+    _handleHardwareSkip(direction) {
+        const action = getChapterAwareSkipAction({
+            direction,
+            item: this._item,
+            player: this._player
+        });
+
+        log.info(`Hardware Remote: ${direction === 'next' ? 'Next' : 'Previous'} -> ${action}`);
+
+        switch (action) {
+            case 'nextChapter':
+                this._player.nextChapter();
+                this._osd?.show();
+                this._osd?.resetAutoHide?.();
+                break;
+            case 'previousChapter':
+                this._player.previousChapter();
+                this._osd?.show();
+                this._osd?.resetAutoHide?.();
+                break;
+            case 'nextChannel':
+                this._handleChannelChange(1);
+                break;
+            case 'previousChannel':
+                this._handleChannelChange(-1);
+                break;
+            case 'nextTrack':
+                this._playNextItem();
+                break;
+            case 'previousTrack':
+                this._playPreviousItem();
+                break;
+        }
     }
 
     render() {
@@ -467,6 +503,9 @@ class PlayerPage extends Page {
             };
             eventBus.on('remote:previous', this._onRemotePrevious);
 
+            this._onHardwareNext = () => this._handleHardwareSkip('next');
+            this._onHardwarePrevious = () => this._handleHardwareSkip('previous');
+
             // Repeat and Shuffle
             this._onRemoteRepeatMode = (mode) => {
                 log.info('Remote: SetRepeatMode', mode);
@@ -636,34 +675,10 @@ class PlayerPage extends Page {
             this.on('key:pause', () => this._onRemotePause());
             this.on('key:playPause', () => this._onRemotePlayPause());
             this.on('key:stop', () => this._onRemoteStop());
-            this.on('key:next', () => this._onRemoteNext());
-            this.on('key:previous', () => this._onRemotePrevious());
-            this.on('key:channelUp', () => {
-                // Optional LG channel-rocker override: jump chapters during VOD playback.
-                // Keep upstream Live TV channel switching as the fallback.
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.nextChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Up -> next chapter (user preference)');
-                    this._player.nextChapter();
-                    return;
-                }
-                this._onRemoteChannelUp();
-            });
-            this.on('key:channelDown', () => {
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.previousChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Down -> previous chapter (user preference)');
-                    this._player.previousChapter();
-                    return;
-                }
-                this._onRemoteChannelDown();
-            });
+            this.on('key:next', () => this._onHardwareNext());
+            this.on('key:previous', () => this._onHardwarePrevious());
+            this.on('key:channelUp', () => this._onRemoteChannelUp());
+            this.on('key:channelDown', () => this._onRemoteChannelDown());
 
             this.on('key:rewind', () => {
                 if (this._player) {
@@ -1031,8 +1046,8 @@ class PlayerPage extends Page {
                     onPlay: () => this._onRemotePlay(),
                     onPause: () => this._onRemotePause(),
                     onStop: () => this._onRemoteStop(),
-                    onNext: () => this._onRemoteNext(),
-                    onPrevious: () => this._onRemotePrevious(),
+                    onNext: () => this._onHardwareNext(),
+                    onPrevious: () => this._onHardwarePrevious(),
                     onSeekForward: () => {
                         if (this._player) this._player.seekRelative(30000);
                     },

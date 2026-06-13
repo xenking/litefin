@@ -253,6 +253,14 @@ class TizenAdapter {
                     e.preventDefault();
                     eventBus.emit('key:fastForward', e);
                     break;
+                case TIZEN_KEYS.NEXT:
+                    e.preventDefault();
+                    eventBus.emit('key:next', e);
+                    break;
+                case TIZEN_KEYS.PREVIOUS:
+                    e.preventDefault();
+                    eventBus.emit('key:previous', e);
+                    break;
 
                 // Color buttons
                 case TIZEN_KEYS.RED:
