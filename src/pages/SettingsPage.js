@@ -20,7 +20,7 @@ import FontLoader from '../utils/FontLoader.js';
 import { debugOverlay } from '../ui/DebugOverlay.js';
 import { storage } from '../utils/StorageService.js';
 import { logger } from '../utils/Logger.js';
-import { i18n } from '../utils/i18n.js';
+import { i18n, normalizeUiLanguage } from '../utils/i18n.js';
 import { availableLanguages } from '../locales/languages.js';
 import { pluginManager } from '../plugins/PluginManager.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
@@ -275,7 +275,7 @@ class SettingsPage extends Page {
                         ${this._renderDropdown(
                             'app-language-select',
                             this.uiLanguages,
-                            storage.getItem('app_language') || 'en-us'
+                            normalizeUiLanguage(storage.getItem('app_language') || 'en-us')
                         )}
                     </div>
                 </div>

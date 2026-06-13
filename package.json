@@ -38,6 +38,7 @@
         "local:status": "npm run locale:status",
         "local:update": "npm run locale:update",
         "postinstall": "patch-package",
+        "test:i18n": "node scripts/i18n-regression-test.mjs",
         "test:subtitles": "node scripts/subtitle-regression-test.mjs",
         "test:track-prefs": "node scripts/track-preference-regression-test.mjs"
     },

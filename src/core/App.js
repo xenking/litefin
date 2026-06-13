@@ -17,7 +17,7 @@ import { tizenAdapter } from '../tizen/TizenAdapter.js';
 import { webosAdapter } from '../webos/WebOSAdapter.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
 import { layoutManager } from '../ui/LayoutManager.js';
-import { i18n } from '../utils/i18n.js';
+import { i18n, normalizeUiLanguage } from '../utils/i18n.js';
 import { syncPlayGroupMenu } from './syncplay/SyncPlayGroupMenu.js';
 import { exitDialog } from '../ui/ExitDialog.js';
 
@@ -125,7 +125,11 @@ class App {
 
         // 3.5. Initialize translations
         // Ensures language dictionaries are loaded before the UI renders
-        const appLanguage = storage.getItem('app_language') || 'en-us';
+        const rawAppLanguage = storage.getItem('app_language') || 'en-us';
+        const appLanguage = normalizeUiLanguage(rawAppLanguage);
+        if (rawAppLanguage !== appLanguage) {
+            storage.setItem('app_language', appLanguage);
+        }
         await i18n.init(appLanguage);
 
         // 3.6. Initialize Layout Direction (RTL/LTR)
