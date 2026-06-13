@@ -395,10 +395,6 @@ export class SubtitleParser {
      * @private
      */
     static _isAssVectorDrawingText(originalText, cleanedText) {
-        if (!/\\p[1-9]\d*/i.test(originalText)) {
-            return false;
-        }
-
         const normalized = cleanedText
             .replace(/<br\s*\/?>/gi, ' ')
             .replace(/\s+/g, ' ')
@@ -408,8 +404,14 @@ export class SubtitleParser {
             return false;
         }
 
-        // ASS drawing text is command letters (m/l/b) followed by coordinate
-        // numbers. This intentionally does not match normal prose.
-        return /^(?:[mlb]\s+(?:[-+]?\d+(?:\.\d+)?\s*){2,6})+$/i.test(normalized);
+        if (/\\p[1-9]\d*/i.test(originalText)) {
+            // ASS drawing text is command letters (m/l/b) followed by coordinate
+            // numbers. This intentionally does not match normal prose.
+            return /^(?:[mlb]\s+(?:[-+]?\d+(?:\.\d+)?\s*){2,6})+$/i.test(normalized);
+        }
+
+        // ffmpeg/Jellyfin sometimes strips the {\pN} tags before emitting VTT,
+        // leaving only the raw vector path. Drop pure drawing payloads there too.
+        return /^(?:[mlb]\s+(?:[-+]?\d+(?:\.\d+)?\s*){2,12}\s*)+$/i.test(normalized);
     }
 }

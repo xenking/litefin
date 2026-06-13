@@ -13,6 +13,8 @@
  */
 
 import { SubtitleParser } from './SubtitleParser.js';
+import { buildActiveCuePayload } from './SubtitleCueUtils.js';
+import { isSecondarySubtitleTrackRenderable } from './SubtitleTrackPolicy.js';
 import ASSRenderer from './ASSRenderer.js';
 import PGSRenderer from './PGSRenderer.js';
 import MediaHelper from './MediaHelper.js';
@@ -119,7 +121,7 @@ export default class SubtitleManager {
         this._primaryTrack = null;          // Selected Jellyfin subtitle stream object
         this._primaryDelivery = DeliveryMethod.NONE;
         this._primaryCues = [];             // Parsed cue array for text-based rendering
-        this._activePrimaryCue = null;      // Currently displayed primary cue
+        this._activePrimaryCue = null;      // Currently displayed primary cue payload
         this._primaryActiveIndex = -1;      // Cached index for sequential search optimization
         this._primaryOffset = 0;            // User-applied timing offset in seconds
 
@@ -130,7 +132,7 @@ export default class SubtitleManager {
         this._secondaryTrack = null;
         this._secondaryDelivery = DeliveryMethod.NONE;
         this._secondaryCues = [];
-        this._activeSecondaryCue = null;
+        this._activeSecondaryCue = null;    // Currently displayed secondary cue payload
         this._secondaryActiveIndex = -1;
         this._secondaryOffset = 0;
 
@@ -1022,17 +1024,16 @@ export default class SubtitleManager {
      * Check if a subtitle track can be rendered in the secondary slot.
      *
      * Secondary subtitles are always DOM-text-rendered, so we only accept
-     * pure text codecs plus ASS/SSA (which the server can transcode to VTT).
-     * PGS and image-based formats are not supported and must be rejected.
+     * pure text codecs. ASS/SSA are intentionally rejected here: converting
+     * complex ASS to VTT loses overlapping dialogue/sign layers and can duplicate
+     * primary subtitles.
      *
      * @param {Object} track - Subtitle stream object with a Codec property
      * @returns {boolean} True if the track can be shown in the secondary slot
      * @private
      */
     _isSecondaryRenderable(track) {
-        const codec = (track.Codec || '').toLowerCase();
-        // Text formats can be fetched directly; ASS/SSA are transcoded to VTT by the server
-        return this._isTextFormat(codec) || codec === 'ass' || codec === 'ssa';
+        return isSecondarySubtitleTrackRenderable(track);
     }
 
     // ========================================================================
@@ -1130,67 +1131,28 @@ export default class SubtitleManager {
         // Apply the user's timing offset
         const adjustedTime = currentTimeSeconds - offset;
 
-        // =====================================================================
-        // Optimized Stateful Search
-        // =====================================================================
-        // Use the last known index as a starting point. Since playback is
-        // usually sequential, we check the current index first, then the next,
-        // falling back to a full (but still prioritized) search only if the
-        // time has jumped (seeking).
-        // =====================================================================
-        let currentIndex = slot === 'primary' ? this._primaryActiveIndex : this._secondaryActiveIndex;
-        let activeCue = null;
-
-        // 1. Check if the current cached cue is still valid
-        if (currentIndex >= 0 && currentIndex < cues.length) {
-            const cue = cues[currentIndex];
-            if (adjustedTime >= cue.start && adjustedTime <= cue.end) {
-                activeCue = cue;
-            } else if (adjustedTime > cue.end && currentIndex + 1 < cues.length) {
-                // 2. Not in current cue? Check if it's the very next one (common case)
-                const nextCue = cues[currentIndex + 1];
-                if (adjustedTime >= nextCue.start && adjustedTime <= nextCue.end) {
-                    activeCue = nextCue;
-                    currentIndex++;
-                }
-            }
-        }
-
-        // 3. Fallback: Full search if not found by incrementing
-        if (!activeCue) {
-            // Priority search: usually we are moving forward or staying near where we were
-            // If the time jumped backward or significantly forward, we scan.
-            activeCue = cues.find((cue, idx) => {
-                if (adjustedTime >= cue.start && adjustedTime <= cue.end) {
-                    currentIndex = idx;
-                    return true;
-                }
-                return false;
-            });
-        }
-
-        // Update cached index
-        if (slot === 'primary') {
-            this._primaryActiveIndex = currentIndex;
-        } else {
-            this._secondaryActiveIndex = currentIndex;
-        }
-
         // Determine the current "active cue" reference for this slot
         const currentActive = slot === 'primary' ? this._activePrimaryCue : this._activeSecondaryCue;
+        const activePayload = buildActiveCuePayload(cues, adjustedTime);
 
-        if (activeCue) {
-            // Only emit if the cue actually changed (avoid redundant renders)
-            if (currentActive !== activeCue) {
+        if (activePayload) {
+            if (slot === 'primary') {
+                this._primaryActiveIndex = activePayload.firstIndex;
+            } else {
+                this._secondaryActiveIndex = activePayload.firstIndex;
+            }
+
+            // Only emit if the active payload actually changed.
+            if (!currentActive || currentActive.key !== activePayload.key) {
                 if (slot === 'primary') {
-                    this._activePrimaryCue = activeCue;
+                    this._activePrimaryCue = activePayload;
                 } else {
-                    this._activeSecondaryCue = activeCue;
+                    this._activeSecondaryCue = activePayload;
                 }
 
                 callback({
-                    text: activeCue.text,
-                    duration: (activeCue.end - activeCue.start) * 1000
+                    text: activePayload.text,
+                    duration: activePayload.duration
                 });
             }
         } else {
@@ -1205,15 +1167,8 @@ export default class SubtitleManager {
                 callback({ text: '' });
             }
             
-            // If we are between cues, keep the last index so we can efficiently find the next one
-            // unless the time is before the start of our current range.
-            if (currentIndex >= 0 && currentIndex < cues.length) {
-               if (adjustedTime < cues[currentIndex].start) {
-                   // Time jumped backward before current cue? Reset to allow search from start next tick.
-                   if (slot === 'primary') this._primaryActiveIndex = -1;
-                   else this._secondaryActiveIndex = -1;
-               }
-            }
+            if (slot === 'primary') this._primaryActiveIndex = -1;
+            else this._secondaryActiveIndex = -1;
         }
     }
 

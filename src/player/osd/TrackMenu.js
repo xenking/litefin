@@ -1,5 +1,6 @@
 import BaseMenu from './BaseMenu.js';
 import { i18n } from '../../utils/i18n.js';
+import { filterSecondarySubtitleTracks } from '../core/SubtitleTrackPolicy.js';
 
 /**
  * TrackMenu
@@ -74,22 +75,7 @@ export default class TrackMenu extends BaseMenu {
             tracks = (tracksRaw.then) ? await tracksRaw : tracksRaw;
 
             if (this.mode === 'secondary') {
-                // ============================================================
-                // Secondary subtitle restriction: only text-renderable codecs.
-                // PGS, image-based, and unknown formats cannot be DOM-rendered,
-                // so we filter them out entirely. This set must stay in sync
-                // with SubtitleManager._isSecondaryRenderable().
-                // ============================================================
-                const TEXT_CODECS = new Set([
-                    'srt', 'subrip',
-                    'vtt', 'webvtt',
-                    'ttml', 'dfxp',
-                    'smi', 'sami',
-                    'mov_text', 'tx3g',
-                    'scc', 'sbv', 'ttxt',
-                    'ass', 'ssa'  // server transcodes these to VTT
-                ]);
-                tracks = tracks.filter(t => TEXT_CODECS.has((t.Codec || '').toLowerCase()));
+                tracks = filterSecondarySubtitleTracks(tracks);
                 title = i18n.t('SecondaryTextOnly');
             } else {
                 title = i18n.t('Subtitles');
@@ -168,7 +154,7 @@ export default class TrackMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.selectTrack(parseInt(btn.dataset.menuIndex));
+                this.selectTrack(parseInt(btn.dataset.index, 10));
             });
         });
 
@@ -220,17 +206,11 @@ export default class TrackMenu extends BaseMenu {
         this.open('subtitles', newMode);
     }
 
-    selectTrack(menuIndex) {
+    selectTrack(index) {
         const player = this.osd.player;
         if (!player) return;
 
         if (this.type === 'subtitles') {
-            const tracksRaw = player.getSubtitleTracks();
-            const tracks = Array.isArray(tracksRaw) ? tracksRaw : []; 
-            
-            // Offset for "Off" at index 0
-            const index = (menuIndex === 0) ? -1 : (tracks[menuIndex - 1]?.Index ?? -1);
-            
             if (this.mode === 'secondary') {
                 this.osd.currentSecondarySubtitleIndex = index;
                 player.setSecondarySubtitleStreamIndex?.(index);
@@ -239,9 +219,6 @@ export default class TrackMenu extends BaseMenu {
                 player.setSubtitleStreamIndex?.(index);
             }
         } else {
-            const tracksRaw = player.getAudioTracks();
-            const tracks = Array.isArray(tracksRaw) ? tracksRaw : [];
-            const index = tracks[menuIndex]?.Index ?? 0;
             this.osd.currentAudioIndex = index;
             player.setAudioStreamIndex?.(index);
         }

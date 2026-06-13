@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { SubtitleParser } from '../src/player/core/SubtitleParser.js';
+import { buildActiveCuePayload } from '../src/player/core/SubtitleCueUtils.js';
+import {
+    filterSecondarySubtitleTracks,
+    isSecondarySubtitleTrackRenderable
+} from '../src/player/core/SubtitleTrackPolicy.js';
 import { preProcessAssContent } from '../src/player/core/AssStylePreprocessor.js';
 
 const oregairuLikeVtt = `WEBVTT
@@ -11,6 +17,27 @@ const oregairuLikeVtt = `WEBVTT
 
 00:02:32.840 --> 00:02:34.840
 {\\blur1.1\\fax0.55\\an1\\pos(12,82)}Подготовительные занятия
+`;
+
+const kaguyaOverlapVtt = `WEBVTT
+
+08:03.290 --> 08:06.040
+Больше мне не помогай.
+И вообще не говори со мной.
+
+08:06.170 --> 08:08.880
+Мико, это розыгрыш! Розыгрыш, ясно?!
+
+08:06.220 --> 08:08.680
+m 1490 15 l 1910 15 1910 195 1490 195
+
+08:06.220 --> 08:08.680
+Розыгрыш
+удался!
+
+08:06.220 --> 08:08.680
+Розыгрыш
+удался!
 `;
 
 const oregairuLikeAss = `[Script Info]
@@ -106,6 +133,35 @@ function dialogueLines(content) {
     const cues = SubtitleParser.parse(oregairuLikeVtt);
     assert.equal(cues.length, 1, 'pure ASS vector drawing VTT cue should be dropped');
     assert.equal(cues[0].text, 'Подготовительные занятия');
+}
+
+{
+    const cues = SubtitleParser.parse(kaguyaOverlapVtt);
+    assert.equal(cues.some(cue => /^m 1490\b/.test(cue.text)), false, 'ffmpeg/Jellyfin ASS vector path text should be dropped even when \\p tags are gone');
+
+    const active = buildActiveCuePayload(cues, 486.30);
+    assert.ok(active, 'overlap window should have active fallback subtitle text');
+    assert.equal(
+        active.text,
+        'Мико, это розыгрыш! Розыгрыш, ясно?!<br>Розыгрыш<br>удался!',
+        'text fallback should preserve main dialogue and one deduped sign cue at the same time'
+    );
+}
+
+{
+    const tracks = [
+        { Index: 3, Type: 'Subtitle', Codec: 'ass', DisplayTitle: 'Надписи' },
+        { Index: 4, Type: 'Subtitle', Codec: 'ass', DisplayTitle: 'Crunchyroll' },
+        { Index: 5, Type: 'Subtitle', Codec: 'vtt', DisplayTitle: 'Simple VTT' },
+        { Index: 6, Type: 'Subtitle', Codec: 'pgs', DisplayTitle: 'PGS' }
+    ];
+
+    assert.equal(isSecondarySubtitleTrackRenderable(tracks[0]), false, 'secondary ASS must not silently convert to lossy VTT');
+    assert.deepEqual(
+        filterSecondarySubtitleTracks(tracks).map(track => track.Index),
+        [5],
+        'secondary menu should show only lossless DOM-text renderable subtitle tracks'
+    );
 }
 
 {
@@ -207,6 +263,20 @@ function dialogueLines(content) {
     const result = preProcessAssContent(missingPlayResAss);
     assert.match(result.content, /PlayResX: 384/, 'missing PlayResX should be patched for libjass');
     assert.match(result.content, /PlayResY: 288/, 'missing PlayResY should be patched for libjass');
+}
+
+{
+    const trackMenuSource = readFileSync(new URL('../src/player/osd/TrackMenu.js', import.meta.url), 'utf8');
+    assert.match(
+        trackMenuSource,
+        /this\.selectTrack\(parseInt\(btn\.dataset\.index/,
+        'TrackMenu selection should use the rendered stream Index, not the raw unfiltered menu index'
+    );
+    assert.doesNotMatch(
+        trackMenuSource,
+        /tracks\[menuIndex - 1\]/,
+        'TrackMenu must not index the unfiltered raw subtitle list after rendering a filtered secondary list'
+    );
 }
 
 console.log('OK: subtitle regressions passed');
