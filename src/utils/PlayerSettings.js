@@ -32,10 +32,10 @@ const DEFAULTS = {
     allowedAudioChannels: -1,
 
     // Enable DTS passthrough (requires hardware support)
-    enableDts: false,
+    enableDts: 'auto',
 
     // Enable TrueHD passthrough (requires hardware support)
-    enableTrueHd: false,
+    enableTrueHd: 'auto',
 
     // Allow FLAC audio in video containers (MKV, MP4, etc.) to DirectPlay.
     // Disabled by default: FLAC demuxing inside video containers causes a ~2s
@@ -168,7 +168,7 @@ const DEFAULTS = {
 
     // Custom Vertical Position (0-100% from bottom, used when subtitleVerticalPosition is 'custom')
     subtitleVerticalPositionCustom: 10,
-    
+
     // PGS Subtitle Playback Mode ('client', 'burn', 'disable')
     // 'client' = Custom Web Worker rendering on the TV (Default)
     // 'burn' = Force server to transcode video and burn into frames
@@ -198,16 +198,16 @@ const DEFAULTS = {
     // =========================================================================
 
     // Enable HEVC/H.265 codec for direct play (safe to leave on for all Tizen 4+)
-    enableHEVC: true,
+    enableHEVC: 'auto',
 
     // Enable AV1 codec (auto-gated by Tizen version ≥ 5.5 in DeviceProfile)
-    enableAV1: true,
+    enableAV1: 'auto',
 
     // Enable VP9 codec (auto-gated by Tizen version / panel resolution)
-    enableVP9: true,
+    enableVP9: 'auto',
 
     // Enable HDR10/HLG pass-through
-    enableHDR: true,
+    enableHDR: 'auto',
 
     // Player backend ('auto', 'avplay', 'webos', 'html5')
     playerBackend: 'auto',
@@ -231,7 +231,7 @@ const DEFAULTS = {
     interlacedBackendFallback: true,
 
     // Enable Dolby Vision pass-through (auto-detected via avinfo API)
-    enableDolbyVision: true,
+    enableDolbyVision: 'auto',
 
     // Enable DTS and TrueHD — see AUDIO SETTINGS above (enableDts, enableTrueHd)
 
@@ -412,7 +412,10 @@ const DEFAULTS = {
     osdHideShowName: false,
 
     // Size of the show/movie logo in OSD ('small', 'medium', 'large')
-    osdLogoSize: 'medium'
+    osdLogoSize: 'medium',
+
+    // Background opacity of the track menus (0-100)
+    osdTrackMenuBgOpacity: 85
 };
 
 /**
@@ -448,6 +451,19 @@ export const PlayerSettings = {
         } else if (typeof defaultValue === 'number') {
             return Number(stored);
         }
+        // Legacy migration for compatibility settings converted from boolean to auto/enable/disable string
+        if (
+            key === 'enableHEVC' ||
+            key === 'enableAV1' ||
+            key === 'enableVP9' ||
+            key === 'enableHDR' ||
+            key === 'enableDolbyVision' ||
+            key === 'enableDts' ||
+            key === 'enableTrueHd'
+        ) {
+            if (stored === 'true') return 'enable';
+            if (stored === 'false') return 'disable';
+        }
         return stored;
     },
 
@@ -464,7 +480,7 @@ export const PlayerSettings = {
 
         storage.setItem(STORAGE_PREFIX + key, String(value));
         log.debug(`Saved ${key}: ${value}`);
-        
+
         // Notify subscribers that a setting has changed
         eventBus.emit(`pref:${key}`, value);
     },

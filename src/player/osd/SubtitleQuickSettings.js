@@ -166,7 +166,9 @@ export default class SubtitleQuickSettings extends BaseMenu {
                     { value: 'kitty', label: i18n.t('FontKitty') || 'Kitty' },
                     { value: 'inter', label: i18n.t('FontInter') || 'Inter' },
                     { value: 'proxima', label: i18n.t('FontProxima') || 'Proxima Nova' },
-                    { value: 'baloo', label: i18n.t('FontBaloo') || 'Baloo Bhaijaan 2' }
+                    { value: 'baloo', label: i18n.t('FontBaloo') || 'Baloo Bhaijaan 2' },
+                    { value: 'opendyslexic', label: i18n.t('FontOpenDyslexic') || 'OpenDyslexic' },
+                    { value: 'atkinson', label: i18n.t('FontAtkinson') || 'Atkinson Hyperlegible' }
                 ]
             },
             {
@@ -387,7 +389,9 @@ export default class SubtitleQuickSettings extends BaseMenu {
                     { value: 'kitty', label: i18n.t('FontKitty') || 'Kitty' },
                     { value: 'inter', label: i18n.t('FontInter') || 'Inter' },
                     { value: 'proxima', label: i18n.t('FontProxima') || 'Proxima Nova' },
-                    { value: 'baloo', label: i18n.t('FontBaloo') || 'Baloo Bhaijaan 2' }
+                    { value: 'baloo', label: i18n.t('FontBaloo') || 'Baloo Bhaijaan 2' },
+                    { value: 'opendyslexic', label: i18n.t('FontOpenDyslexic') || 'OpenDyslexic' },
+                    { value: 'atkinson', label: i18n.t('FontAtkinson') || 'Atkinson Hyperlegible' }
                 ]
             },
             {

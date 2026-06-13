@@ -63,6 +63,7 @@ class PlayerPage extends Page {
 
         // Track reporting state
         this._hasReportedStart = false;
+        this._isPaused = false;
 
         // Cached media source for stop reporting
         // (player clears this internally after stop, so we need a copy)
@@ -146,6 +147,7 @@ class PlayerPage extends Page {
         this._item = null;
         this._resumePosition = 0;
         this._hasReportedStart = false;
+        this._isPaused = false;
         this._cachedPlayMethod = null;
 
         // Hide global clock during player loading/playback
@@ -1237,9 +1239,9 @@ class PlayerPage extends Page {
             // ================================================================
             // TRANSITION GUARD FOR EXIT SIGNALS
             // ================================================================
-            // In webOS and other smart TV browsers, DOM manipulation (such as 
-            // cycling the video container to clear hardware buffers) triggers 
-            // focus loss which can synthesize back / exit signals. 
+            // In webOS and other smart TV browsers, DOM manipulation (such as
+            // cycling the video container to clear hardware buffers) triggers
+            // focus loss which can synthesize back / exit signals.
             //
             // If the player is currently in the process of switching tracks,
             // ignore this command entirely to prevent unexpected shutdowns.
@@ -1308,6 +1310,7 @@ class PlayerPage extends Page {
         if (!this._hasReportedStart) {
             this._reportPlaybackStart();
             this._hasReportedStart = true;
+            this._isPaused = false;
 
             /*
              * Thread the resolved media source ID to the OSD so TrickplayManager
@@ -1323,7 +1326,9 @@ class PlayerPage extends Page {
             }
         } else {
             // Send 'unpause' event when resuming from pause
-            this._reportPlaybackProgress('unpause');
+            if (this._isPaused) {
+                this._reportPlaybackProgress('unpause');
+            }
         }
     }
 
@@ -1331,6 +1336,7 @@ class PlayerPage extends Page {
         log.info('Paused');
         eventBus.emit('player:paused', { item: this._item });
 
+        this._isPaused = true;
         // Report paused state with explicit 'pause' event
         this._reportPlaybackProgress('pause');
     }
@@ -1949,7 +1955,7 @@ class PlayerPage extends Page {
                ------------------------------------------------------------- */
             const isHdr = this._player?.isCurrentMediaHDR?.() || false;
             const styles = SubtitleStyles.getTextStyles(isHdr);
-            
+
             // Apply to the span
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
@@ -2016,7 +2022,7 @@ class PlayerPage extends Page {
                ------------------------------------------------------------- */
             const isHdr = this._player?.isCurrentMediaHDR?.() || false;
             const styles = SubtitleStyles.getSecondaryTextStyles(isHdr);
-            
+
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
                 SubtitleStyles.applyStyles(span, styles);
@@ -2301,6 +2307,12 @@ class PlayerPage extends Page {
         // Never report progress for intros
         if (this._item.isIntro) {
             return;
+        }
+
+        if (eventName === 'pause') {
+            this._isPaused = true;
+        } else if (eventName === 'unpause') {
+            this._isPaused = false;
         }
 
         try {
@@ -2665,9 +2677,9 @@ class PlayerPage extends Page {
         // ====================================================================
         // PHYSICAL / PLATFORM BACK BUTTON TRANSITION GUARD
         // ====================================================================
-        // Discard any back button presses or synthetic back key events from 
-        // the host environment while transitioning tracks. This ensures that 
-        // focus jumps or physical remote hits during the brief settle window 
+        // Discard any back button presses or synthetic back key events from
+        // the host environment while transitioning tracks. This ensures that
+        // focus jumps or physical remote hits during the brief settle window
         // do not cancel the upcoming playback session.
         // ====================================================================
         if (this._isSwitching) {
@@ -2892,7 +2904,7 @@ class PlayerPage extends Page {
                 // Enrich program with channel info for better OSD display
                 program.ChannelName = this._item.Name;
                 program.ChannelNumber = this._item.Number || this._item.ChannelNumber;
-                
+
                 // Cache for OSD init sync and playback start sync
                 this._currentLiveTvProgram = program;
 
@@ -2947,7 +2959,9 @@ class PlayerPage extends Page {
             // 2. Find current channel index
             const currentIndex = this._channels.findIndex((c) => c.Id === this._item.Id);
             if (currentIndex === -1) {
-                log.warn(`Current channel (${this._item.Name}, ${this._item.Id}) not found in navigation list. Falling back to first channel.`);
+                log.warn(
+                    `Current channel (${this._item.Name}, ${this._item.Id}) not found in navigation list. Falling back to first channel.`
+                );
                 const firstChannel = this._channels[0];
                 if (firstChannel.Id === this._item.Id) {
                     log.info('Fallback channel is already playing - ignoring switch.');
@@ -2989,7 +3003,9 @@ class PlayerPage extends Page {
             return;
         }
 
-        log.info(`[ChannelSwitch] Transitioning from ${this._item.Name} (${this._item.Id}) to ${nextChannel.Name} (${nextChannel.Id})`);
+        log.info(
+            `[ChannelSwitch] Transitioning from ${this._item.Name} (${this._item.Id}) to ${nextChannel.Name} (${nextChannel.Id})`
+        );
 
         // Stop current playback cleanly
         if (this._player?.stop) {
@@ -3005,7 +3021,6 @@ class PlayerPage extends Page {
         await new Promise((r) => setTimeout(r, 400));
 
         // Update state for new channel
-        const oldItem = this._item;
         this._item = nextChannel;
         this.title = nextChannel.Name;
         this._resumePosition = 0;
