@@ -66,6 +66,21 @@ assert.match(
 );
 assert.match(
     playerPageSource,
+    /_onRemoteChannelUp\(\) \{[\s\S]*direction: 'next'[\s\S]*if \(action === 'nextChapter'\) \{[\s\S]*this\._handleHardwareSkip\('next'\)[\s\S]*if \(action !== 'nextChannel'\)/,
+    'channel up rocker must prefer chapters for VOD and must not fall back to episode skip'
+);
+assert.match(
+    playerPageSource,
+    /_onRemoteChannelDown\(\) \{[\s\S]*direction: 'previous'[\s\S]*if \(action === 'previousChapter'\) \{[\s\S]*this\._handleHardwareSkip\('previous'\)[\s\S]*if \(action !== 'previousChannel'\)/,
+    'channel down rocker must prefer chapters for VOD and must not fall back to episode skip'
+);
+assert.doesNotMatch(
+    playerPageSource,
+    /eventBus\.on\('key:channel(?:Up|Down)'/,
+    'channel rocker keys must have a single auto-cleaned PlayerPage subscription'
+);
+assert.match(
+    playerPageSource,
     /onNext: \(\) => this\._onHardwareNext\(\)/,
     'WebOS media session next callback must use chapter-aware hardware routing'
 );

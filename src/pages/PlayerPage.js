@@ -597,13 +597,6 @@ class PlayerPage extends Page {
             };
             eventBus.on('remote:userdatachanged', this._onRemoteUserDataChanged);
 
-            // Channel Up/Down for Live TV
-            this._onChannelUp = () => this._handleChannelChange(1);
-            eventBus.on('key:channelUp', this._onChannelUp);
-
-            this._onChannelDown = () => this._handleChannelChange(-1);
-            eventBus.on('key:channelDown', this._onChannelDown);
-
             // ================================================================
             // MAGIC CURSOR SUPPORT (WebOS / Tizen Pointer)
             // ================================================================
@@ -2853,9 +2846,6 @@ class PlayerPage extends Page {
         if (this._onRemoteSubtitle) eventBus.off('remote:subtitle', this._onRemoteSubtitle);
         if (this._onRemoteQueueUpdate) eventBus.off('remote:queueupdate', this._onRemoteQueueUpdate);
         if (this._onRemoteUserDataChanged) eventBus.off('remote:userdatachanged', this._onRemoteUserDataChanged);
-        if (this._onChannelUp) eventBus.off('key:channelUp', this._onChannelUp);
-        if (this._onChannelDown) eventBus.off('key:channelDown', this._onChannelDown);
-
         // Clean up focus sections
         focusManager.unregister('player-error');
 
@@ -2939,11 +2929,43 @@ class PlayerPage extends Page {
      */
     _onRemoteChannelUp() {
         log.info('Remote: Channel Up');
+        const action = getChapterAwareSkipAction({
+            direction: 'next',
+            item: this._item,
+            player: this._player
+        });
+
+        if (action === 'nextChapter') {
+            this._handleHardwareSkip('next');
+            return;
+        }
+
+        if (action !== 'nextChannel') {
+            log.debug(`Channel Up ignored for non-channel playback (${action})`);
+            return;
+        }
+
         this._handleChannelChange(1);
     }
 
     _onRemoteChannelDown() {
         log.info('Remote: Channel Down');
+        const action = getChapterAwareSkipAction({
+            direction: 'previous',
+            item: this._item,
+            player: this._player
+        });
+
+        if (action === 'previousChapter') {
+            this._handleHardwareSkip('previous');
+            return;
+        }
+
+        if (action !== 'previousChannel') {
+            log.debug(`Channel Down ignored for non-channel playback (${action})`);
+            return;
+        }
+
         this._handleChannelChange(-1);
     }
 
