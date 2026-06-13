@@ -59,6 +59,19 @@ const log = logger.create('HomePage');
  */
 const IMAGE_PREWARM_PER_ROW = 10;
 
+function getHomeResumeDedupKey(item) {
+    if (!item) return null;
+
+    if (item.Type === 'Episode' && item.SeriesId && item.IndexNumber !== undefined && item.IndexNumber !== null) {
+        const seasonKey = item.ParentIndexNumber ?? item.SeasonId ?? item.ParentId;
+        if (seasonKey !== undefined && seasonKey !== null) {
+            return `episode:${item.SeriesId}:${seasonKey}:${item.IndexNumber}`;
+        }
+    }
+
+    return item.Id ? `item:${item.Id}` : null;
+}
+
 /**
  * Card width definitions (matching home.css) — used by VirtualCardRow internally.
  * Landscape: 400px, Portrait: 240px, gap: 24px.
@@ -415,13 +428,14 @@ class HomePage extends Page {
                     // ──────────────────────────────────────────────────────────
                     // STAGE 3: Merge, Deduplicate, and Interweave
                     // ──────────────────────────────────────────────────────────
-                    // Combine the lists and de-duplicate by database Item ID.
+                    // Combine the lists and de-duplicate by logical episode identity.
                     const combined = [...resumeItems, ...nextUpItems];
 
                     const seen = new Set();
                     const deduplicated = combined.filter((item) => {
-                        if (seen.has(item.Id)) return false;
-                        seen.add(item.Id);
+                        const dedupKey = getHomeResumeDedupKey(item);
+                        if (dedupKey && seen.has(dedupKey)) return false;
+                        if (dedupKey) seen.add(dedupKey);
                         return true;
                     });
 
