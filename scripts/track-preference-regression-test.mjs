@@ -3,16 +3,47 @@
 import assert from 'node:assert/strict';
 import { fingerprintStream, findMatchingStream } from '../src/utils/TrackFingerprint.js';
 import { resolveUserDataTrackIndex } from '../src/utils/TrackPreferenceResolver.js';
+import { shouldForceSubtitleOffForPlayback } from '../src/utils/SubtitleSelectionPolicy.js';
 
 const backingStore = new Map();
 globalThis.window = globalThis.window || {};
 globalThis.localStorage = {
-    get length() { return backingStore.size; },
-    key(index) { return Array.from(backingStore.keys())[index] ?? null; },
-    getItem(key) { return backingStore.has(key) ? backingStore.get(key) : null; },
-    setItem(key, value) { backingStore.set(key, String(value)); },
-    removeItem(key) { backingStore.delete(key); }
+    get length() {
+        return backingStore.size;
+    },
+    key(index) {
+        return Array.from(backingStore.keys())[index] ?? null;
+    },
+    getItem(key) {
+        return backingStore.has(key) ? backingStore.get(key) : null;
+    },
+    setItem(key, value) {
+        backingStore.set(key, String(value));
+    },
+    removeItem(key) {
+        backingStore.delete(key);
+    }
 };
+
+{
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: undefined }),
+        true,
+        'subtitleMode=None should force subtitles off when there is no explicit per-playback subtitle selection'
+    );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: 4 }),
+        false,
+        'subtitleMode=None should not override an explicit subtitle track selection from the current playback request'
+    );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: -1 }),
+        false,
+        'explicit subtitle disable selection should remain explicit and skip restore fallbacks'
+    );
+}
 
 {
     const picked = {
@@ -91,11 +122,16 @@ globalThis.localStorage = {
 
     assert.equal(loaded.audio.language, 'eng', 'saved season audio fingerprint should load');
     assert.equal(loaded.audio.isDefault, false, 'saved season audio should preserve non-default flag');
-    assert.equal(loaded.subtitle.codec, 'subrip', 'saved season subtitle fingerprint should merge without erasing audio');
+    assert.equal(
+        loaded.subtitle.codec,
+        'subrip',
+        'saved season subtitle fingerprint should merge without erasing audio'
+    );
 }
 
 {
-    const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } = await import('../src/player/core/AudioTrackMapper.js');
+    const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } =
+        await import('../src/player/core/AudioTrackMapper.js');
     const mediaSource = {
         MediaStreams: [
             { Type: 'Video', Index: 0 },
@@ -228,11 +264,7 @@ globalThis.localStorage = {
         forceServerSelectedAudio: true
     });
 
-    assert.match(
-        streamInfo.url,
-        /Static=false/,
-        'forced DTS audio fallback must not use raw Static=true MKV'
-    );
+    assert.match(streamInfo.url, /Static=false/, 'forced DTS audio fallback must not use raw Static=true MKV');
 
     const streamInfoWithRewrittenDefault = MediaHelper.buildStreamUrl({
         serverUrl: 'https://jellyfin.example',

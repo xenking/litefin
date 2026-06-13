@@ -89,6 +89,23 @@ assert.match(
     /onPrevious: \(\) => this\._onHardwarePrevious\(\)/,
     'WebOS media session previous callback must use chapter-aware hardware routing'
 );
+assert.match(
+    playerPageSource,
+    /handleBack\?\.\(\{ exitWhenOsdVisible: true \}\)/,
+    'physical Back on the player must exit instead of only hiding visible OSD controls'
+);
+assert.match(
+    playerPageSource,
+    /router\.reset\('\/home'\)/,
+    'user-stop Back flow must reset navigation to the home screen'
+);
+
+const osdControllerSource = readFileSync(new URL('../src/player/osd/OSDController.js', import.meta.url), 'utf8');
+assert.match(
+    osdControllerSource,
+    /exitWhenOsdVisible/,
+    'OSD back handling must expose a physical-back mode distinct from internal OSD back'
+);
 
 const webosAdapterSource = readFileSync(new URL('../src/webos/WebOSAdapter.js', import.meta.url), 'utf8');
 assert.doesNotMatch(

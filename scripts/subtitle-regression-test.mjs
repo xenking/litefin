@@ -8,6 +8,7 @@ import {
     filterSecondarySubtitleTracks,
     isSecondarySubtitleTrackRenderable
 } from '../src/player/core/SubtitleTrackPolicy.js';
+import { installSvgPathSegListPolyfill } from '../src/player/core/SvgPathSegPolyfill.js';
 import { preProcessAssContent } from '../src/player/core/AssStylePreprocessor.js';
 
 const oregairuLikeVtt = `WEBVTT
@@ -110,7 +111,7 @@ Dialogue: 0,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,hello
 `;
 
 function styleLine(content, name) {
-    return content.split(/\r?\n/).find(line => line.startsWith(`Style: ${name},`));
+    return content.split(/\r?\n/).find((line) => line.startsWith(`Style: ${name},`));
 }
 
 function marginV(content, name) {
@@ -122,11 +123,11 @@ function alignment(content, name) {
 }
 
 function dialogueLine(content, text) {
-    return content.split(/\r?\n/).find(line => line.includes(text));
+    return content.split(/\r?\n/).find((line) => line.includes(text));
 }
 
 function dialogueLines(content) {
-    return content.split(/\r?\n/).filter(line => line.startsWith('Dialogue:'));
+    return content.split(/\r?\n/).filter((line) => line.startsWith('Dialogue:'));
 }
 
 {
@@ -137,9 +138,13 @@ function dialogueLines(content) {
 
 {
     const cues = SubtitleParser.parse(kaguyaOverlapVtt);
-    assert.equal(cues.some(cue => /^m 1490\b/.test(cue.text)), false, 'ffmpeg/Jellyfin ASS vector path text should be dropped even when \\p tags are gone');
+    assert.equal(
+        cues.some((cue) => /^m 1490\b/.test(cue.text)),
+        false,
+        'ffmpeg/Jellyfin ASS vector path text should be dropped even when \\p tags are gone'
+    );
 
-    const active = buildActiveCuePayload(cues, 486.30);
+    const active = buildActiveCuePayload(cues, 486.3);
     assert.ok(active, 'overlap window should have active fallback subtitle text');
     assert.equal(
         active.text,
@@ -156,9 +161,13 @@ function dialogueLines(content) {
         { Index: 6, Type: 'Subtitle', Codec: 'pgs', DisplayTitle: 'PGS' }
     ];
 
-    assert.equal(isSecondarySubtitleTrackRenderable(tracks[0]), false, 'secondary ASS must not silently convert to lossy VTT');
+    assert.equal(
+        isSecondarySubtitleTrackRenderable(tracks[0]),
+        false,
+        'secondary ASS must not silently convert to lossy VTT'
+    );
     assert.deepEqual(
-        filterSecondarySubtitleTracks(tracks).map(track => track.Index),
+        filterSecondarySubtitleTracks(tracks).map((track) => track.Index),
         [5],
         'secondary menu should show only lossless DOM-text renderable subtitle tracks'
     );
@@ -171,7 +180,11 @@ function dialogueLines(content) {
         videoHeight: 1080
     });
 
-    assert.equal(marginV(result.content, 'Main-Yahari'), '400', 'plain main dialogue should move to requested bottom offset');
+    assert.equal(
+        marginV(result.content, 'Main-Yahari'),
+        '400',
+        'plain main dialogue should move to requested bottom offset'
+    );
     assert.equal(marginV(result.content, 'Window Sign'), '40', 'vector/sign style should keep original margin');
     assert.equal(marginV(result.content, 'Yahari-OP'), '50', 'OP/lyrics style should keep original margin');
     assert.equal(result.dialogueStyles.has('Main-Yahari'), true);
@@ -186,8 +199,16 @@ function dialogueLines(content) {
         videoHeight: 1080
     });
 
-    assert.equal(alignment(result.content, 'Main-Yahari'), '8', 'top preset should move only plain main dialogue to top-center alignment');
-    assert.equal(marginV(result.content, 'Main-Yahari'), '14.4', 'top preset should use a top margin instead of the bottom offset slider');
+    assert.equal(
+        alignment(result.content, 'Main-Yahari'),
+        '8',
+        'top preset should move only plain main dialogue to top-center alignment'
+    );
+    assert.equal(
+        marginV(result.content, 'Main-Yahari'),
+        '14.4',
+        'top preset should use a top margin instead of the bottom offset slider'
+    );
     assert.equal(alignment(result.content, 'Window Sign'), '2', 'sign style alignment should remain unchanged');
     assert.equal(marginV(result.content, 'Window Sign'), '40', 'sign style margin should remain unchanged');
 }
@@ -201,7 +222,11 @@ function dialogueLines(content) {
     });
 
     assert.equal(alignment(result.content, 'Main-Yahari'), '2', 'bottom preset should keep bottom alignment');
-    assert.equal(marginV(result.content, 'Main-Yahari'), '850.4', 'bottom preset should allow offsets beyond the old 750px cap');
+    assert.equal(
+        marginV(result.content, 'Main-Yahari'),
+        '850.4',
+        'bottom preset should allow offsets beyond the old 750px cap'
+    );
 }
 
 {
@@ -214,8 +239,16 @@ function dialogueLines(content) {
     });
 
     assert.equal(marginV(result.content, 'Main-Yahari'), '30', 'position override off should preserve ASS margin');
-    assert.match(styleLine(result.content, 'Main-Yahari'), /Main-Yahari,Arial,48/, 'empty ASS font setting should preserve file font');
-    assert.match(dialogueLine(result.content, 'Подготовительные занятия'), /\\bord4\\shad2/, 'inline ASS border/shadow should be preserved when override is off');
+    assert.match(
+        styleLine(result.content, 'Main-Yahari'),
+        /Main-Yahari,Arial,48/,
+        'empty ASS font setting should preserve file font'
+    );
+    assert.match(
+        dialogueLine(result.content, 'Подготовительные занятия'),
+        /\\bord4\\shad2/,
+        'inline ASS border/shadow should be preserved when override is off'
+    );
 }
 
 {
@@ -233,7 +266,11 @@ function dialogueLines(content) {
         fontScale: 1.2
     });
 
-    assert.match(styleLine(result.content, 'Main-Yahari'), /Main-Yahari,Poppins,57\.6/, 'explicit ASS font override should still work');
+    assert.match(
+        styleLine(result.content, 'Main-Yahari'),
+        /Main-Yahari,Poppins,57\.6/,
+        'explicit ASS font override should still work'
+    );
 }
 
 {
@@ -242,7 +279,11 @@ function dialogueLines(content) {
         shadowThickness: 0.25
     });
 
-    assert.doesNotMatch(dialogueLine(result.content, 'Подготовительные занятия'), /\\bord4\\shad2/, 'inline border/shadow should be stripped only when matching override is on');
+    assert.doesNotMatch(
+        dialogueLine(result.content, 'Подготовительные занятия'),
+        /\\bord4\\shad2/,
+        'inline border/shadow should be stripped only when matching override is on'
+    );
 }
 
 {
@@ -252,11 +293,31 @@ function dialogueLines(content) {
         videoHeight: 1080
     });
 
-    assert.match(styleLine(result.content, 'MainSmall'), /MainSmall,Arial,48,/, 'position override should normalize small main dialogue font size');
-    assert.match(styleLine(result.content, 'MainLarge'), /MainLarge,Arial,48,/, 'position override should normalize large main dialogue font size');
-    assert.match(styleLine(result.content, 'Screen Sign'), /Screen Sign,Arial,80,/, 'position override should not normalize sign font size');
-    assert.doesNotMatch(dialogueLine(result.content, 'маленькая строка'), /\\fs24/, 'position override should strip inline font size from main dialogue');
-    assert.match(dialogueLine(result.content, 'надпись'), /\\fs70/, 'position override should preserve inline font size on positioned signs');
+    assert.match(
+        styleLine(result.content, 'MainSmall'),
+        /MainSmall,Arial,48,/,
+        'position override should normalize small main dialogue font size'
+    );
+    assert.match(
+        styleLine(result.content, 'MainLarge'),
+        /MainLarge,Arial,48,/,
+        'position override should normalize large main dialogue font size'
+    );
+    assert.match(
+        styleLine(result.content, 'Screen Sign'),
+        /Screen Sign,Arial,80,/,
+        'position override should not normalize sign font size'
+    );
+    assert.doesNotMatch(
+        dialogueLine(result.content, 'маленькая строка'),
+        /\\fs24/,
+        'position override should strip inline font size from main dialogue'
+    );
+    assert.match(
+        dialogueLine(result.content, 'надпись'),
+        /\\fs70/,
+        'position override should preserve inline font size on positioned signs'
+    );
 }
 
 {
@@ -276,6 +337,78 @@ function dialogueLines(content) {
         trackMenuSource,
         /tracks\[menuIndex - 1\]/,
         'TrackMenu must not index the unfiltered raw subtitle list after rendering a filtered secondary list'
+    );
+}
+
+{
+    function FakePathElement() {
+        this._attrs = new Map();
+    }
+    FakePathElement.prototype.getAttribute = function (name) {
+        return this._attrs.get(name) || '';
+    };
+    FakePathElement.prototype.setAttribute = function (name, value) {
+        this._attrs.set(name, value);
+    };
+
+    const root = {
+        document: {
+            createElementNS(namespace, tagName) {
+                assert.equal(namespace, 'http://www.w3.org/2000/svg');
+                assert.equal(tagName, 'path');
+                return new FakePathElement();
+            }
+        }
+    };
+
+    const installed = installSvgPathSegListPolyfill(root);
+    assert.equal(installed, true, 'polyfill should install without a global SVGPathElement constructor');
+
+    const path = root.document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.pathSegList.appendItem(path.createSVGPathSegMovetoAbs(1490, 15));
+    path.pathSegList.appendItem(path.createSVGPathSegLinetoAbs(1910, 15));
+    path.pathSegList.appendItem(path.createSVGPathSegCurvetoCubicAbs(10, 20, 30, 40, 50, 60));
+
+    assert.equal(
+        path.getAttribute('d'),
+        'M 1490 15 L 1910 15 C 30 40, 50 60, 10 20',
+        'polyfilled SVG path segment methods should build a valid path d attribute'
+    );
+}
+
+{
+    const jellyfinPlayerSource = readFileSync(new URL('../src/player/core/JellyfinPlayer.js', import.meta.url), 'utf8');
+    assert.match(
+        jellyfinPlayerSource,
+        /_isWebOSDirectPlayAssInitialSubtitle/,
+        'webOS DirectPlay ASS initial subtitles should use a dedicated startup gate'
+    );
+    assert.match(
+        jellyfinPlayerSource,
+        /_deferInitialSubtitleSetup\(this\._currentSubtitleStreamIndex\)/,
+        'initial ASS subtitle setup should be deferred instead of parsing during backend startup'
+    );
+    assert.match(
+        jellyfinPlayerSource,
+        /event\.type === PlayerEvent\.PLAYING/,
+        'deferred ASS subtitle setup should flush when playback reports playing'
+    );
+    assert.match(
+        jellyfinPlayerSource,
+        /event\.type === PlayerEvent\.TIME_UPDATE && event\.data\?\.time > 0\.25/,
+        'deferred ASS subtitle setup should also flush when time starts advancing'
+    );
+
+    const assRendererSource = readFileSync(new URL('../src/player/core/ASSRenderer.js', import.meta.url), 'utf8');
+    assert.match(
+        assRendererSource,
+        /this\._tickThrottleMs = 50/,
+        'ASS renderer should tick often enough for dense timed signs/dialogue'
+    );
+    assert.match(
+        assRendererSource,
+        /addEventListener\('seeked', this\._onSeeked\)/,
+        'ASS renderer should immediately tick at the seek target'
     );
 }
 

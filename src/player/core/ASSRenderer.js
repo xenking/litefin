@@ -20,48 +20,11 @@ import libjass from 'libjass';
 import 'libjass/libjass.css';
 import { logger } from '../../utils/Logger.js';
 import { preProcessAssContent } from './AssStylePreprocessor.js';
+import { installSvgPathSegListPolyfill } from './SvgPathSegPolyfill.js';
 
 // Polyfill SVGPathElement.prototype.pathSegList for modern browsers where it was removed.
 // Required for libjass's ASS vector drawing (\p tag) support.
-if (typeof window !== 'undefined' && typeof SVGPathElement !== 'undefined' && !SVGPathElement.prototype.pathSegList) {
-    Object.defineProperty(SVGPathElement.prototype, 'pathSegList', {
-        get() {
-            const path = this;
-            return {
-                appendItem(item) {
-                    let d = path.getAttribute('d') || '';
-                    if (d) d += ' ';
-                    if (item.type === 'M') {
-                        d += `M ${item.x} ${item.y}`;
-                    } else if (item.type === 'L') {
-                        d += `L ${item.x} ${item.y}`;
-                    } else if (item.type === 'C') {
-                        d += `C ${item.x1} ${item.y1}, ${item.x2} ${item.y2}, ${item.x} ${item.y}`;
-                    }
-                    path.setAttribute('d', d);
-                    return item;
-                },
-                clear() {
-                    path.setAttribute('d', '');
-                }
-            };
-        },
-        configurable: true,
-        enumerable: true
-    });
-
-    SVGPathElement.prototype.createSVGPathSegMovetoAbs = function (x, y) {
-        return { type: 'M', x, y };
-    };
-
-    SVGPathElement.prototype.createSVGPathSegLinetoAbs = function (x, y) {
-        return { type: 'L', x, y };
-    };
-
-    SVGPathElement.prototype.createSVGPathSegCurvetoCubicAbs = function (x, y, x1, y1, x2, y2) {
-        return { type: 'C', x, y, x1, y1, x2, y2 };
-    };
-}
+installSvgPathSegListPolyfill();
 
 const log = logger.create('ASSRenderer');
 
@@ -105,24 +68,20 @@ export default class ASSRenderer {
         this._styleStateKey = null;
 
         /*
-         * Seek debounce: when the user jumps a chapter or scrubs rapidly,
-         * `_onSeeking` fires followed by a burst of `timeupdate` events while
-         * the browser re-buffers. Each tick drives libjass ASS cue lookups
-         * synchronously on the main thread — the same thread that runs the
-         * OSD opacity CSS transition. We debounce seek ticks so that libjass
-         * only re-renders once after the seek settles (100ms of silence),
-         * freeing the main thread for the OSD animation to complete smoothly.
+         * Seek debounce: keep seek bursts coalesced, but do not hold ASS for
+         * 100ms+. Dense anime signs/dialogue overlaps need a near-immediate
+         * tick after seek or the primary line visibly lags behind the video.
          */
         this._seekDebounceTimer = null;
         this._isSeeking = false;
 
         /*
          * Timeupdate throttle: during normal playback we tick libjass at most
-         * once every 100ms (matching the AVPlay tick rate and providing
+         * once every 50ms (20fps, enough for dense ASS timing while still
          * sub-100ms subtitle accuracy without excessive main-thread load).
          */
         this._lastTickTime = 0;
-        this._tickThrottleMs = 100;
+        this._tickThrottleMs = 50;
 
         log.info('ASSRenderer initialized' +
             (this._isVirtual ? ' (AVPlay/ManualClock mode)' : ' (HTML5/VideoClock mode)'));
@@ -146,10 +105,8 @@ export default class ASSRenderer {
         this._lastTime = timeSeconds;
         if (this._clock) {
             /*
-             * During a seek burst (chapter jump / scrubbing), suppress individual
-             * ticks and coalesce them into a single tick 100ms after the seek settles.
-             * This prevents libjass from doing repeated synchronous ASS cue layout
-             * work while the OSD show animation is also running on the main thread.
+             * During a seek burst (chapter jump / scrubbing), coalesce repeated
+             * ticks, but keep the delay short so ASS is visible at the seek target.
              */
             if (this._isSeeking) {
                 // Cancel any previous pending debounce
@@ -157,13 +114,14 @@ export default class ASSRenderer {
                 this._seekDebounceTimer = setTimeout(() => {
                     this._isSeeking = false;
                     this._seekDebounceTimer = null;
+                    this._lastTickTime = 0;
                     this._doTick(timeSeconds);
-                }, 100);
+                }, 25);
                 return;
             }
 
             /*
-             * During normal playback, throttle to _tickThrottleMs (100ms).
+             * During normal playback, throttle to _tickThrottleMs.
              * libjass interpolates between ticks internally, so this doesn't
              * visibly degrade subtitle accuracy while cutting main-thread load.
              */
@@ -471,6 +429,7 @@ export default class ASSRenderer {
         if (this._videoElement) {
             this._videoElement.removeEventListener('timeupdate', this._onTimeUpdate);
             this._videoElement.removeEventListener('seeking', this._onSeeking);
+            this._videoElement.removeEventListener('seeked', this._onSeeked);
             this._videoElement.removeEventListener('play', this._onPlay);
             this._videoElement.removeEventListener('pause', this._onPause);
         }
@@ -597,6 +556,7 @@ export default class ASSRenderer {
              */
             if (this._onTimeUpdate) this._videoElement.removeEventListener('timeupdate', this._onTimeUpdate);
             if (this._onSeeking)    this._videoElement.removeEventListener('seeking', this._onSeeking);
+            if (this._onSeeked)     this._videoElement.removeEventListener('seeked', this._onSeeked);
             if (this._onPlay)       this._videoElement.removeEventListener('play', this._onPlay);
             if (this._onPause)      this._videoElement.removeEventListener('pause', this._onPause);
 
@@ -605,20 +565,27 @@ export default class ASSRenderer {
             this._onTimeUpdate = () => this.tick(this._videoElement.currentTime);
             this._onSeeking = () => {
                 /*
-                 * Mark that we are in a seek burst. tick() will suppress individual
-                 * ticks and debounce into a single tick once the seek settles.
-                 * This prevents libjass from hammering the main thread during
-                 * rapid seeks (chapter jumps, scrubbing through the seekbar) at
-                 * the same moment the OSD is showing its opacity transition.
+                 * Mark that we are in a seek burst. `seeked` performs the real
+                 * immediate tick; this timer is only a short fallback for engines
+                 * that fail to emit `seeked`.
                  */
                 this._isSeeking = true;
                 if (this._seekDebounceTimer) clearTimeout(this._seekDebounceTimer);
-                // Schedule the debounced tick in case seeked never fires
                 this._seekDebounceTimer = setTimeout(() => {
                     this._isSeeking = false;
                     this._seekDebounceTimer = null;
+                    this._lastTickTime = 0;
                     if (this._clock) this._doTick(this._videoElement.currentTime);
-                }, 150);
+                }, 25);
+            };
+            this._onSeeked = () => {
+                if (this._seekDebounceTimer) {
+                    clearTimeout(this._seekDebounceTimer);
+                    this._seekDebounceTimer = null;
+                }
+                this._isSeeking = false;
+                this._lastTickTime = 0;
+                if (this._clock) this._doTick(this._videoElement.currentTime);
             };
             this._onPlay = () => {
                 if (this._clock) this._clock.play();
@@ -629,6 +596,7 @@ export default class ASSRenderer {
 
             this._videoElement.addEventListener('timeupdate', this._onTimeUpdate);
             this._videoElement.addEventListener('seeking', this._onSeeking);
+            this._videoElement.addEventListener('seeked', this._onSeeked);
             this._videoElement.addEventListener('play', this._onPlay);
             this._videoElement.addEventListener('pause', this._onPause);
 

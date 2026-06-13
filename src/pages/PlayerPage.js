@@ -36,6 +36,7 @@ import { webosAdapter } from '../webos/WebOSAdapter.js';
 import { syncPlayManager } from '../core/syncplay/SyncPlayManager.js';
 import { globalClock } from '../ui/GlobalClock.js';
 import { getChapterAwareSkipAction } from './playerRemoteNavigation.js';
+import { shouldForceSubtitleOffForPlayback } from '../utils/SubtitleSelectionPolicy.js';
 
 const log = logger.create('Player');
 
@@ -896,30 +897,33 @@ class PlayerPage extends Page {
         // If that is missing/stale, prefer the fork's season-scoped fingerprint,
         // then upstream's session-wide language memory, and finally defaults.
         const seasonPref = this._resolveSeasonTrackPref(item, mediaSource);
-        const userDataAudioIndex = resolveUserDataTrackIndex(
-            mediaSource,
-            'Audio',
-            item.UserData?.AudioStreamIndex
-        );
+        const userDataAudioIndex = resolveUserDataTrackIndex(mediaSource, 'Audio', item.UserData?.AudioStreamIndex);
         const userDataSubtitleIndex = resolveUserDataTrackIndex(
             mediaSource,
             'Subtitle',
             item.UserData?.SubtitleStreamIndex
         );
-        let savedAudioIndex = preSelectedAudio !== null && preSelectedAudio !== undefined ? preSelectedAudio : undefined;
-        let savedSubtitleIndex = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined ? preSelectedSubtitle : undefined;
+        const subtitleMode = PlayerSettings.get('subtitleMode') || 'Default';
+        const forceSubtitleOff = shouldForceSubtitleOffForPlayback({
+            subtitleMode,
+            preSelectedSubtitle
+        });
+        let savedAudioIndex =
+            preSelectedAudio !== null && preSelectedAudio !== undefined ? preSelectedAudio : undefined;
+        let savedSubtitleIndex =
+            preSelectedSubtitle !== null && preSelectedSubtitle !== undefined ? preSelectedSubtitle : undefined;
 
         if (savedAudioIndex === undefined && userDataAudioIndex !== undefined) {
             savedAudioIndex = userDataAudioIndex;
         }
-        if (savedSubtitleIndex === undefined && userDataSubtitleIndex !== undefined) {
+        if (!forceSubtitleOff && savedSubtitleIndex === undefined && userDataSubtitleIndex !== undefined) {
             savedSubtitleIndex = userDataSubtitleIndex;
         }
 
         if (savedAudioIndex === undefined && seasonPref.audio !== null) {
             savedAudioIndex = seasonPref.audio;
         }
-        if (savedSubtitleIndex === undefined && seasonPref.subtitle !== null) {
+        if (!forceSubtitleOff && savedSubtitleIndex === undefined && seasonPref.subtitle !== null) {
             savedSubtitleIndex = seasonPref.subtitle;
         }
 
@@ -945,7 +949,7 @@ class PlayerPage extends Page {
                 }
             }
 
-            if (savedSubtitleIndex === undefined) {
+            if (!forceSubtitleOff && savedSubtitleIndex === undefined) {
                 const sessionSubtitleLang = storage.getItem('session:lastSubtitleLang');
                 const sessionSubtitleTitle = storage.getItem('session:lastSubtitleTitle');
                 if (sessionSubtitleLang) {
@@ -969,7 +973,9 @@ class PlayerPage extends Page {
         if (savedAudioIndex === undefined) {
             savedAudioIndex = mediaSource?.DefaultAudioStreamIndex;
         }
-        if (savedSubtitleIndex === undefined) {
+        if (forceSubtitleOff) {
+            savedSubtitleIndex = -1;
+        } else if (savedSubtitleIndex === undefined) {
             savedSubtitleIndex = mediaSource?.DefaultSubtitleStreamIndex;
         }
 
@@ -980,6 +986,7 @@ class PlayerPage extends Page {
             preSelectedSubtitle,
             userDataAudioIndex,
             userDataSubtitleIndex,
+            subtitleMode,
             seasonPrefApplied: seasonPref.applied
         });
 
@@ -2114,16 +2121,19 @@ class PlayerPage extends Page {
         if (!this._item || this._item.Type !== 'Episode') return;
         if (!this._item.SeriesId || !this._item.SeasonId) return;
 
-        const mediaSource = this._player?.getCurrentMediaSource?.()
-            || this._player?._currentMediaSource
-            || this._item.MediaSources?.[0];
+        const mediaSource =
+            this._player?.getCurrentMediaSource?.() ||
+            this._player?._currentMediaSource ||
+            this._item.MediaSources?.[0];
         const streams = mediaSource?.MediaStreams || [];
         if (streams.length === 0) return;
 
         // Start fresh if we switched series or season since last capture.
-        if (!this._seasonTrackPref
-            || this._seasonTrackPref.seriesId !== this._item.SeriesId
-            || this._seasonTrackPref.seasonId !== this._item.SeasonId) {
+        if (
+            !this._seasonTrackPref ||
+            this._seasonTrackPref.seriesId !== this._item.SeriesId ||
+            this._seasonTrackPref.seasonId !== this._item.SeasonId
+        ) {
             this._seasonTrackPref = {
                 seriesId: this._item.SeriesId,
                 seasonId: this._item.SeasonId,
@@ -2162,12 +2172,10 @@ class PlayerPage extends Page {
         // Write-through to localStorage so the choice survives app exit.
         // Keyed by serverUrl+userId+seasonId; LRU-capped at 50 seasons.
         if (audioDelta !== undefined || subtitleDelta !== undefined) {
-            saveSeasonPref(
-                api.serverUrl,
-                api.userId,
-                this._item.SeasonId,
-                { audio: audioDelta, subtitle: subtitleDelta }
-            );
+            saveSeasonPref(api.serverUrl, api.userId, this._item.SeasonId, {
+                audio: audioDelta,
+                subtitle: subtitleDelta
+            });
         }
     }
 
@@ -2191,9 +2199,11 @@ class PlayerPage extends Page {
         // Prefer the hot in-memory snapshot when it matches the current season.
         // Cold starts (fresh app launch, resumed series) fall through to disk.
         let pref = null;
-        if (this._seasonTrackPref
-            && this._seasonTrackPref.seriesId === item.SeriesId
-            && this._seasonTrackPref.seasonId === item.SeasonId) {
+        if (
+            this._seasonTrackPref &&
+            this._seasonTrackPref.seriesId === item.SeriesId &&
+            this._seasonTrackPref.seasonId === item.SeasonId
+        ) {
             pref = {
                 audio: this._seasonTrackPref.audio,
                 subtitle: this._seasonTrackPref.subtitle
@@ -2223,7 +2233,9 @@ class PlayerPage extends Page {
             if (match) {
                 out.audio = match.Index;
                 out.applied = true;
-                log.info(`Season track pref: matched audio → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+                log.info(
+                    `Season track pref: matched audio → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`
+                );
             }
         }
 
@@ -2236,7 +2248,9 @@ class PlayerPage extends Page {
             if (match) {
                 out.subtitle = match.Index;
                 out.applied = true;
-                log.info(`Season track pref: matched subtitle → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+                log.info(
+                    `Season track pref: matched subtitle → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`
+                );
             }
         }
 
@@ -2695,8 +2709,9 @@ class PlayerPage extends Page {
             return true;
         }
 
-        // Delegate to OSD — it handles menu close → OSD hide → exit chain
-        if (this._osd?.handleBack?.()) {
+        // Physical platform Back closes an open OSD menu first; otherwise it exits
+        // the player immediately instead of only hiding the visible controls.
+        if (this._osd?.handleBack?.({ exitWhenOsdVisible: true })) {
             log.info('OSD handled back event');
             return true;
         }
@@ -2765,6 +2780,11 @@ class PlayerPage extends Page {
         // Emit for any general listeners; no longer used by the chain logic
         // but kept for potential future use (e.g., analytics, remote control).
         eventBus.emit('player:stopped', { itemId: this._item?.Id, reason });
+
+        if (clearChain && reason === 'userStop') {
+            router.reset('/home');
+            return;
+        }
 
         // ----------------------------------------------------------------
         // Navigation Override: Ensure we return to the Details page of the

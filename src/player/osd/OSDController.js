@@ -1775,11 +1775,13 @@ export default class OSDController extends Component {
 
 
     // Public API for PlayerPage
-    handleBack() {
-        return this._handleBack();
+    handleBack(options = {}) {
+        return this._handleBack(options);
     }
 
-    _handleBack() {
+    _handleBack(options = {}) {
+        const exitWhenOsdVisible = options.exitWhenOsdVisible === true;
+
         if (this.activeMenu && this.activeMenu.isVisible) {
             // Priority: Try to let the active menu handle the 'back' key itself.
             // This allows sub-menus to return to their parent menus (e.g. Sub-menu -> Settings).
@@ -1802,7 +1804,7 @@ export default class OSDController extends Component {
             }
         }
         
-        if (this._isOsdVisible) {
+        if (this._isOsdVisible && !exitWhenOsdVisible) {
             this.hide();
         } else {
             this._executeAction('exit');
