@@ -537,11 +537,7 @@ class CardRenderer {
                     titleText = i18n.ensureBiDi(`${e} - ${item.Name}`);
                     subtitleText = '';
                 } else {
-                    if (useEpisodeBadges) {
-                        titleText = i18n.ensureBiDi(item.Name);
-                    } else {
-                        titleText = i18n.ensureBiDi(`${episodeCode} - ${item.Name}`);
-                    }
+                    titleText = i18n.ensureBiDi(`${episodeCode} - ${item.Name}`);
                     subtitleText = i18n.ensureBiDi(item.SeriesName || '');
                 }
             } else {
@@ -552,13 +548,7 @@ class CardRenderer {
                     } else {
                         // Next Up Style (Keep Series Name)
                         titleText = i18n.ensureBiDi(item.SeriesName || item.Name);
-                        // If useEpisodeBadges is true, Episode code is in the badge, just show name.
-                        // If useEpisodeBadges is false, Show "SxxExx - Name".
-                        if (useEpisodeBadges) {
-                            subtitleText = i18n.ensureBiDi(item.Name);
-                        } else {
-                            subtitleText = i18n.ensureBiDi(`${episodeCode} - ${item.Name} `);
-                        }
+                        subtitleText = i18n.ensureBiDi(`${episodeCode} - ${item.Name}`);
                     }
                 } else {
                     // Poster Style: Episode code in badge if useEpisodeBadges is true

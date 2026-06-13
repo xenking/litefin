@@ -2901,7 +2901,16 @@ class DetailsPage extends Page {
                     .replace('<button ', '<button aria-current="true" ')
                     .replace('class="media-card', 'class="media-card current-item-card');
             },
-            focusSectionName: 'more-from-season-section'
+            focusSectionName: 'more-from-season-section',
+            onClick: (card) => {
+                if (!card.dataset.itemId) return;
+                if (card.dataset.itemId === this._itemId) {
+                    this._play();
+                    return;
+                }
+
+                router.navigate(`/details/${card.dataset.itemId}`);
+            }
         });
 
         if (currentEpisodeIndex >= 0) {
