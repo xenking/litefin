@@ -130,6 +130,34 @@ globalThis.localStorage = {
 }
 
 {
+    const { PlayerSettings } = await import('../src/utils/PlayerSettings.js');
+    const { storage } = await import('../src/utils/StorageService.js');
+
+    assert.equal(PlayerSettings.get('enableDts'), 'auto', 'DTS passthrough should default to auto');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', false),
+        false,
+        'auto DTS setting should resolve to false when device capability is false'
+    );
+
+    storage.setItem('player:enableDts', 'enable');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', false),
+        true,
+        'explicit DTS enable should override missing device capability'
+    );
+
+    storage.setItem('player:enableDts', 'disable');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', true),
+        false,
+        'explicit DTS disable should override present device capability'
+    );
+
+    storage.removeItem('player:enableDts');
+}
+
+{
     const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } =
         await import('../src/player/core/AudioTrackMapper.js');
     const mediaSource = {

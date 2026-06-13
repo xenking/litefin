@@ -468,6 +468,19 @@ export const PlayerSettings = {
     },
 
     /**
+     * Resolve auto/enable/disable compatibility settings to a boolean.
+     * @param {string} key - Setting key from DEFAULTS
+     * @param {boolean} autoValue - Device capability value used when setting is auto
+     * @returns {boolean}
+     */
+    resolveCompatibilitySetting(key, autoValue = false) {
+        const value = this.get(key);
+        if (value === 'enable' || value === true) return true;
+        if (value === 'disable' || value === false) return false;
+        return Boolean(autoValue);
+    },
+
+    /**
      * Set a setting value
      * @param {string} key - Setting key
      * @param {*} value - Value to store

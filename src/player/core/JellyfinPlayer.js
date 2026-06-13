@@ -19,7 +19,7 @@ import { platformInfo } from '../../utils/PlatformInfo.js';
 import { MediaHelper } from './MediaHelper.js';
 import { shouldForceServerSelectedAudio } from './AudioFallbackPolicy.js';
 import { resolveBackendAudioTrackListIndex, getBackendVisibleAudioStreams } from './AudioTrackMapper.js';
-import { buildJellyfinProfile } from '../../api/DeviceProfile.js';
+import { buildJellyfinProfile, getDeviceCapabilities } from '../../api/DeviceProfile.js';
 import SubtitleManager, { DeliveryMethod } from './SubtitleManager.js';
 import { logger } from '../../utils/Logger.js';
 import { PlayerSettings } from '../../utils/PlayerSettings.js';
@@ -625,11 +625,12 @@ export class JellyfinPlayer extends EventEmitter {
                 log.info(`[AudioSelection] Requested: ${reqIndex}, Default: ${defaultIndex}, First: ${firstAudioIndex}, Custom: ${isCustomAudioTrack}, IsFirst: ${isFirstAudioTrack}, Codec: ${selectedOriginalAudioCodec}`);
             }
 
+            const audioCodecSupport = this._getAudioCodecSupport();
             const needsDirectStreamForAudio = shouldForceServerSelectedAudio({
                 selectedAudioCodec: selectedOriginalAudioCodec,
                 originalAudioStreamCount,
                 forceDirectStream: options._forceDirectStream,
-                enableTrueHd: PlayerSettings.get('enableTrueHd')
+                enableTrueHd: audioCodecSupport.enableTrueHd
             });
 
             // Determine effective playback mode for profiling
@@ -1383,15 +1384,16 @@ export class JellyfinPlayer extends EventEmitter {
 
         let isTargetCodecSupported = true;
         if (this._backendType === 'tizen' || this._backendType === 'webos') {
+            const audioCodecSupport = this._getAudioCodecSupport();
             const AudioTracks = this.getAudioTracks();
             const targetTrack = AudioTracks.find(t => t.Index === index);
             if (targetTrack && targetTrack.Codec) {
                 const targetCodec = targetTrack.Codec.toLowerCase();
                 if (this._backendType === 'tizen' && (targetCodec === 'flac' || targetCodec === 'alac') && !PlayerSettings.get('enableFlacInVideo')) {
                     isTargetCodecSupported = false;
-                } else if (targetCodec.includes('dts') && !PlayerSettings.get('enableDts')) {
+                } else if (targetCodec.includes('dts') && !audioCodecSupport.enableDts) {
                     isTargetCodecSupported = false;
-                } else if (targetCodec === 'truehd' && !PlayerSettings.get('enableTrueHd')) {
+                } else if (targetCodec === 'truehd' && !audioCodecSupport.enableTrueHd) {
                     isTargetCodecSupported = false;
                 }
             }
@@ -1951,6 +1953,14 @@ export class JellyfinPlayer extends EventEmitter {
         return this._currentMediaSource?.MediaStreams?.filter((s) => s.Type === 'Audio') || [];
     }
 
+    _getAudioCodecSupport() {
+        const caps = getDeviceCapabilities();
+        return {
+            enableDts: PlayerSettings.resolveCompatibilitySetting('enableDts', caps?.dts),
+            enableTrueHd: PlayerSettings.resolveCompatibilitySetting('enableTrueHd', caps?.truehd)
+        };
+    }
+
     /**
      * Get audio tracks expected to be visible/selectable to the active backend.
      * @param {Object} [mediaSource]
@@ -1958,11 +1968,12 @@ export class JellyfinPlayer extends EventEmitter {
      * @private
      */
     _getBackendAudioTracks(mediaSource = this._currentMediaSource) {
+        const audioCodecSupport = this._getAudioCodecSupport();
         return getBackendVisibleAudioStreams({
             mediaSource,
             backendType: this._backendType,
-            enableDts: PlayerSettings.get('enableDts'),
-            enableTrueHd: PlayerSettings.get('enableTrueHd')
+            enableDts: audioCodecSupport.enableDts,
+            enableTrueHd: audioCodecSupport.enableTrueHd
         });
     }
 
@@ -1974,12 +1985,13 @@ export class JellyfinPlayer extends EventEmitter {
      * @private
      */
     _getBackendAudioTrackListIndex(streamIndex, mediaSource = this._currentMediaSource) {
+        const audioCodecSupport = this._getAudioCodecSupport();
         return resolveBackendAudioTrackListIndex({
             audioStreamIndex: streamIndex,
             mediaSource,
             backendType: this._backendType,
-            enableDts: PlayerSettings.get('enableDts'),
-            enableTrueHd: PlayerSettings.get('enableTrueHd')
+            enableDts: audioCodecSupport.enableDts,
+            enableTrueHd: audioCodecSupport.enableTrueHd
         });
     }
 

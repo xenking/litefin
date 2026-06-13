@@ -754,9 +754,6 @@ class HomePage extends Page {
             // Notify base Page that async content is ready for scroll/focus restoration
             this.restoreScrollFocusWhenReady();
 
-            // Mark the page as fully loaded and ready, resolving the ready Promise
-            this.markReady();
-
             // Safety net: if no row triggered _tryInitializeFocus during rendering
             // (e.g. all rows failed or there was no target row), initialize now.
             if (!this._focusInitialized) {
@@ -784,6 +781,9 @@ class HomePage extends Page {
                     this.setActiveSection('sidebar');
                 }
 
+                // Mark ready only after focus restoration has completed; Page.markReady()
+                // schedules app:hideSplash, and firing it earlier can reveal scroll-top.
+                this.markReady();
                 this._hideSplash();
             });
         } catch (error) {
