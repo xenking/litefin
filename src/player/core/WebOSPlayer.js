@@ -1246,6 +1246,19 @@ export class WebOSPlayer {
     }
 
     /** @private */
+    _isNativeHlsStream() {
+        return Boolean(this._currentPlayOptions?.isHls && !this._hlsPlayer);
+    }
+
+    /** @private */
+    _shouldSuppressNativeHlsBufferEvent() {
+        if (!this._isNativeHlsStream()) return false;
+        const bufferAhead = this._getBufferAhead();
+        const bufferGate = PlayerSettings.get('webosBufferGate') || 10;
+        return bufferAhead > bufferGate;
+    }
+
+    /** @private */
     _onWaiting() {
         // ----------------------------------------------------------------
         // Suppress waiting events before the first 'playing' fires.
@@ -1271,6 +1284,15 @@ export class WebOSPlayer {
         // Let the decoder self-recover silently; only engage stall machinery
         // once we know the player is already producing frames.
         if (!this._started) return;
+
+        if (this._shouldSuppressNativeHlsBufferEvent()) {
+            log.debug(
+                'WebOSPlayer: Native HLS stalled with',
+                this._getBufferAhead().toFixed(1),
+                's buffered — suppressing UI spinner and recovery seek'
+            );
+            return;
+        }
 
         this.onEvent({ type: 'waiting' });
         this._startStallCheck();
@@ -1388,6 +1410,15 @@ export class WebOSPlayer {
         const isDoVi = rangeType.indexOf('DOVI') !== -1;
 
         if (bufferAtStall > HICCUP_BUFFER_THRESHOLD) {
+            if (this._isNativeHlsStream()) {
+                log.debug(
+                    'WebOSPlayer: Native HLS stall with',
+                    bufferAtStall.toFixed(1),
+                    's buffered — no recovery seek; native HLS buffer must stay intact'
+                );
+                return;
+            }
+
             // ────────────────────────────────────────────────────────────────
             // FAST PATH: Decoder hiccup — buffer is healthy, network is fine.
             // ────────────────────────────────────────────────────────────────
@@ -1515,6 +1546,15 @@ export class WebOSPlayer {
                         'WebOSPlayer: Stall timer fired with',
                         bufferAhead.toFixed(1),
                         's buffered — segment-boundary micro-stall, letting decoder self-recover'
+                    );
+                    return;
+                }
+
+                if (this._isNativeHlsStream() && bufferAhead > 0) {
+                    log.debug(
+                        'WebOSPlayer: Native HLS still stalled with',
+                        bufferAhead.toFixed(1),
+                        's buffered — avoiding recovery seek to preserve buffer'
                     );
                     return;
                 }

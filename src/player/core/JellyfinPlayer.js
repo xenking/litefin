@@ -1109,6 +1109,7 @@ export class JellyfinPlayer extends EventEmitter {
             }
 
             const forceServerSelectedAudio = Boolean(needsDirectStreamForAudio);
+            const forceVideoCopyHlsVariant = forceServerSelectedAudio && this._backendType === 'webos';
 
             // Build stream URL
             const streamInfo = MediaHelper.buildStreamUrl({
@@ -1126,7 +1127,11 @@ export class JellyfinPlayer extends EventEmitter {
                 // Only force server-selected audio for codecs that cannot be
                 // locally switched/passed through safely. DTS/DCA stays on the
                 // server-audio path; TrueHD may use raw passthrough when enabled.
-                forceServerSelectedAudio
+                forceServerSelectedAudio,
+                // WebOS native HLS can choose Jellyfin's SDR full-transcode
+                // fallback from master.m3u8 even when video-copy HDR is the
+                // first variant. Pin audio-only fallback to that copy variant.
+                forceVideoCopyHlsVariant
             });
 
             //log.debug('Stream Info built:', streamInfo);

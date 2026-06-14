@@ -43,7 +43,8 @@
         "test:track-prefs": "node scripts/track-preference-regression-test.mjs",
         "test:ui-cards": "node scripts/details-card-regression-test.mjs",
         "test:home-resume": "node scripts/home-resume-regression-test.mjs",
-        "test:pr-review": "node scripts/pr-review-regression-test.mjs"
+        "test:pr-review": "node scripts/pr-review-regression-test.mjs",
+        "test:webos-hdr": "node scripts/webos-hdr-regression-test.mjs"
     },
     "keywords": [
         "jellyfin",
