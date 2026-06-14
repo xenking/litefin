@@ -686,7 +686,9 @@ class ScrollController {
                             track.__virtualRow.cardType !== 'square' &&
                             track.__virtualRow.cardType !== 'artist';
 
-                        elementWidth = canExpand ? 600 : track.__virtualRow.itemWidth;
+                        elementWidth = canExpand
+                            ? Math.round(600 * (track.__virtualRow.modernMultiplier || 1.0))
+                            : track.__virtualRow.itemWidth;
                         trackWidth = track.__virtualRow.getTrackWidth();
                     } else {
                         if (isRtl) {

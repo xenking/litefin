@@ -93,9 +93,10 @@ export class VirtualCardRow {
         if (isModern) {
             // Add a buffer for the expanded card width (375px) so the track doesn't clip.
             // Symmetrical spacing keeps the row scroll boundaries aligned cleanly.
-            const expansion = this.isLandscape || this.cardType === 'square' || this.cardType === 'artist'
-                ? 0
-                : 375 * (this.modernMultiplier || 1.0);
+            const expansion =
+                this.isLandscape || this.cardType === 'square' || this.cardType === 'artist'
+                    ? 0
+                    : 375 * (this.modernMultiplier || 1.0);
             this.track.style.width = `${totalWidth + expansion}px`;
 
             /**
@@ -670,9 +671,8 @@ export class VirtualCardRow {
 
         const elementPos = this.getItemPosition(clamped);
         const isModern = document.documentElement.getAttribute('data-layout') === 'modern';
-        const canExpand =
-            isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
-        const elementWidth = canExpand ? 600 : this.itemWidth;
+        const canExpand = isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
+        const elementWidth = canExpand ? Math.round(600 * (this.modernMultiplier || 1.0)) : this.itemWidth;
         const containerWidth = this.track.parentElement ? this.track.parentElement.clientWidth : window.innerWidth;
         const trackWidth = this.getTrackWidth();
         const targetScroll = elementPos - containerWidth / 2 + elementWidth / 2;

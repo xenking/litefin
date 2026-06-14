@@ -31,10 +31,10 @@ const DEFAULTS = {
     // Maximum audio channels (-1 = all available)
     allowedAudioChannels: -1,
 
-    // Enable DTS passthrough (requires hardware support)
+    // Enable DTS passthrough (auto resolves through device capabilities before boolean use)
     enableDts: 'auto',
 
-    // Enable TrueHD passthrough (requires hardware support)
+    // Enable TrueHD passthrough (auto resolves through device capabilities before boolean use)
     enableTrueHd: 'auto',
 
     // Allow FLAC audio in video containers (MKV, MP4, etc.) to DirectPlay.

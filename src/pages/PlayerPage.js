@@ -2718,7 +2718,7 @@ class PlayerPage extends Page {
 
         log.info('OSD did not handle back, calling _stopAndExit()');
         // OSD is hidden and no menu is open — stop playback and go back
-        this._stopAndExit();
+        this._stopAndExit(true, 'remoteBack');
         return true;
     }
 
@@ -2781,7 +2781,7 @@ class PlayerPage extends Page {
         // but kept for potential future use (e.g., analytics, remote control).
         eventBus.emit('player:stopped', { itemId: this._item?.Id, reason });
 
-        if (clearChain && reason === 'userStop') {
+        if (clearChain && reason === 'remoteBack') {
             router.reset('/home');
             return;
         }

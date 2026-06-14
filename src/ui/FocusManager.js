@@ -150,7 +150,7 @@ class FocusManager {
             const isPageLoading =
                 document.body.classList.contains('app-splash-active') ||
                 document.querySelector('.page.loading') ||
-                document.querySelector('.page-loading');
+                document.querySelector('.page.loading .page-loading');
 
             if (isPageLoading) {
                 const sectionName = this.getSectionForElement(e.target);

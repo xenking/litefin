@@ -42,7 +42,8 @@
         "test:subtitles": "node scripts/subtitle-regression-test.mjs",
         "test:track-prefs": "node scripts/track-preference-regression-test.mjs",
         "test:ui-cards": "node scripts/details-card-regression-test.mjs",
-        "test:home-resume": "node scripts/home-resume-regression-test.mjs"
+        "test:home-resume": "node scripts/home-resume-regression-test.mjs",
+        "test:pr-review": "node scripts/pr-review-regression-test.mjs"
     },
     "keywords": [
         "jellyfin",

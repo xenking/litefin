@@ -482,7 +482,8 @@ export function buildJellyfinProfile(options = {}) {
     // container determines what codecs are muxable:
     //
     //   MPEG-TS (tsCompatibleVideoCodecs):
-    //     Supports H264, HEVC, MPEG-2 Video, VC1 — but NOT AV1 or VP9.
+    //     Supports H264, HEVC, MPEG-2 Video, and VC1 when the platform still
+    //     reports VC1 capability — but NOT AV1 or VP9.
     //     When an AV1/VP9 source has incompatible audio (e.g. DTS-HD MA), the
     //     MPEG-TS profile can't copy the video — it must re-encode to H264.
     //
@@ -494,7 +495,8 @@ export function buildJellyfinProfile(options = {}) {
     //
     // directVideoCodecs is used in DirectStreamProfiles (progressive HTTP remux).
     // =========================================================================
-    const tsCompatibleVideoCodecs = ['h264', 'vc1', 'mpeg2video'];
+    const tsCompatibleVideoCodecs = ['h264', 'mpeg2video'];
+    if (caps.vc1) tsCompatibleVideoCodecs.push('vc1');
     // Tizen < 6.0 AVPlay does not support HEVC inside HLS MPEG-TS streams
     if (enableHEVC && caps.tizenVersion >= 6) tsCompatibleVideoCodecs.push('hevc');
 
