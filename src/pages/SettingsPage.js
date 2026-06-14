@@ -6507,6 +6507,7 @@ class SettingsPage extends Page {
         storage.removeItem('litefin:roundedCorners');
         storage.removeItem('litefin:textScale');
         storage.removeItem('litefin:osdButtonBorders');
+        storage.removeItem('litefin:badgeStyle');
 
         // 4. Clear other app settings
         storage.removeItem('app_language');

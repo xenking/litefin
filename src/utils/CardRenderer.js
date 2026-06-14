@@ -477,6 +477,11 @@ class CardRenderer {
             let height = item.Height;
             let isHdr = false;
 
+            const itemVideoRange = item.VideoRange || item.VideoRangeType;
+            if (itemVideoRange && itemVideoRange.toLowerCase().includes('hdr')) {
+                isHdr = true;
+            }
+
             if (item.MediaSources && item.MediaSources.length > 0) {
                 const source = item.MediaSources[0];
                 if (source.Width) width = source.Width;
@@ -491,6 +496,16 @@ class CardRenderer {
                             isHdr = true;
                         }
                     }
+                }
+            }
+
+            const itemVideoStream = item.MediaStreams?.find((s) => s.Type === 'Video');
+            if (itemVideoStream) {
+                if (itemVideoStream.Width) width = itemVideoStream.Width;
+                if (itemVideoStream.Height) height = itemVideoStream.Height;
+                const videoRange = itemVideoStream.VideoRange || itemVideoStream.VideoRangeType;
+                if (videoRange && videoRange.toLowerCase().includes('hdr')) {
+                    isHdr = true;
                 }
             }
 

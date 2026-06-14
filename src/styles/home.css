@@ -40,7 +40,7 @@ html[data-layout-media-rows="modern"] .media-row--skeleton .row-items-track {
     padding-right: 48px;
 }
 
-[dir="rtl"] html[data-layout-media-rows="modern"] .media-row--skeleton .row-items-track {
+html[dir="rtl"][data-layout-media-rows="modern"] .media-row--skeleton .row-items-track {
     padding-left: 0;
     padding-right: 60px;
 }
@@ -307,4 +307,3 @@ html[data-layout-tier="ultra-legacy"] .media-card.focused .card-overlay-label {
     -webkit-transform: scale(1.05);
     transform: scale(1.05);
 }
-

@@ -115,6 +115,21 @@ assert.match(
 );
 assert.match(
     baseCss,
+    /html\[dir="rtl"\]\[data-card-label-align="start"\] \.media-card:not\(\.list-skeleton\) \.skeleton-line/,
+    'RTL card label start skeleton selector should match attributes on the html root'
+);
+assert.match(
+    baseCss,
+    /html\[dir="rtl"\]\[data-card-label-align="end"\] \.media-card:not\(\.list-skeleton\) \.skeleton-line/,
+    'RTL card label end skeleton selector should match attributes on the html root'
+);
+assert.doesNotMatch(
+    baseCss,
+    /\[dir="rtl"\] html\[data-card-label-align=/,
+    'RTL card label skeleton selectors should not look for html inside a dir ancestor'
+);
+assert.match(
+    baseCss,
     /\.view-list \.media-card \.card-title,[\s\S]*\.view-list \.media-card \.card-subtitle \{[\s\S]*text-align: start !important;/,
     'list views should override card label alignment without complex :not() selectors'
 );
@@ -129,6 +144,44 @@ assert.doesNotMatch(
     layoutManager,
     /resolvedStyle = this\._layout === 'modern' \? 'dark' : 'tinted';/,
     'LayoutManager auto badge style should not use stale compatibility layout state'
+);
+
+const settingsPage = read('src/pages/SettingsPage.js');
+assert.match(
+    settingsPage,
+    /_handleResetAll\(\) \{[\s\S]*storage\.removeItem\('litefin:badgeStyle'\);/,
+    'Settings reset-all should clear the persisted badge style'
+);
+
+const homeCss = read('src/styles/home.css');
+assert.match(
+    homeCss,
+    /html\[dir="rtl"\]\[data-layout-media-rows="modern"\] \.media-row--skeleton \.row-items-track/,
+    'modern RTL home skeleton selector should match attributes on the html root'
+);
+assert.doesNotMatch(
+    homeCss,
+    /\[dir="rtl"\] html\[data-layout-media-rows="modern"\]/,
+    'modern RTL home skeleton selector should not look for html inside a dir ancestor'
+);
+
+const apiClient = read('src/api/ApiClient.js');
+assert.match(
+    apiClient,
+    /const QUALITY_BADGE_FIELDS = \[[\s\S]*'Width'[\s\S]*'Height'[\s\S]*'VideoRange'[\s\S]*'MediaSources'[\s\S]*'MediaStreams'[\s\S]*\];/,
+    'ApiClient should keep a single quality badge field contract for card item queries'
+);
+assert.match(
+    apiClient,
+    /QUALITY_BADGE_FIELDS\.forEach\(\(field\) => \{[\s\S]*fieldsList\.push\(field\);/,
+    'ApiClient should append quality badge fields when the quality badge preference is enabled'
+);
+
+const cardRenderer = read('src/utils/CardRenderer.js');
+assert.match(
+    cardRenderer,
+    /item\.MediaStreams\?\.find\(\(s\) => s\.Type === 'Video'\)/,
+    'CardRenderer should read item-level MediaStreams when media sources are not present'
 );
 
 const libraryPage = read('src/pages/LibraryPage.js');

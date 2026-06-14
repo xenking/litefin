@@ -31,6 +31,8 @@ export class ServerUnreachableError extends Error {
 // API request timeout (ms)
 const REQUEST_TIMEOUT = 30000; // Increased from 10s to 30s for weaker hardware (Tizen/WebOS)
 
+const QUALITY_BADGE_FIELDS = ['Width', 'Height', 'VideoRange', 'MediaSources', 'MediaStreams'];
+
 // ============================================================================
 // ApiClient Class
 // ============================================================================
@@ -197,9 +199,9 @@ export class ApiClient {
             if (isItemsEndpoint) {
                 const targetKey = fieldsKey || 'Fields';
                 const fieldsList = (options.params[targetKey] || '').split(',').filter(Boolean);
-                ['Width', 'Height', 'VideoRange', 'MediaSources'].forEach((f) => {
-                    if (!fieldsList.includes(f)) {
-                        fieldsList.push(f);
+                QUALITY_BADGE_FIELDS.forEach((field) => {
+                    if (!fieldsList.includes(field)) {
+                        fieldsList.push(field);
                     }
                 });
                 options.params[targetKey] = fieldsList.join(',');
