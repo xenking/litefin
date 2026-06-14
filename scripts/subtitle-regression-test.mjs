@@ -380,23 +380,18 @@ function dialogueLines(content) {
     const jellyfinPlayerSource = readFileSync(new URL('../src/player/core/JellyfinPlayer.js', import.meta.url), 'utf8');
     assert.match(
         jellyfinPlayerSource,
-        /_isWebOSDirectPlayAssInitialSubtitle/,
-        'webOS DirectPlay ASS initial subtitles should use a dedicated startup gate'
+        /_startInitialSubtitleSetup\(this\._currentSubtitleStreamIndex, 'play'\);/,
+        'initial subtitle setup should start immediately after backend play resolves'
     );
-    assert.match(
+    assert.doesNotMatch(
         jellyfinPlayerSource,
-        /_deferInitialSubtitleSetup\(this\._currentSubtitleStreamIndex\)/,
-        'initial ASS subtitle setup should be deferred instead of parsing during backend startup'
+        /_pendingInitialSubtitleStreamIndex|_deferInitialSubtitleSetup|_flushDeferredInitialSubtitleSetup/,
+        'initial ASS subtitle setup must not be deferred behind PLAYING/TIME_UPDATE events'
     );
-    assert.match(
+    assert.doesNotMatch(
         jellyfinPlayerSource,
-        /event\.type === PlayerEvent\.PLAYING/,
-        'deferred ASS subtitle setup should flush when playback reports playing'
-    );
-    assert.match(
-        jellyfinPlayerSource,
-        /event\.type === PlayerEvent\.TIME_UPDATE && event\.data\?\.time > 0\.25/,
-        'deferred ASS subtitle setup should also flush when time starts advancing'
+        /webOS playback starts moving/,
+        'webOS subtitles should not wait for decoder movement before renderer setup'
     );
 
     const assRendererSource = readFileSync(new URL('../src/player/core/ASSRenderer.js', import.meta.url), 'utf8');

@@ -880,6 +880,8 @@ class PlayerPage extends Page {
         const preSelectedMediaSourceId = state.get('player:initialMediaSourceId');
         const preSelectedAudio = state.get('player:initialAudioIndex');
         const preSelectedSubtitle = state.get('player:initialSubtitleIndex');
+        const hasPreSelectedAudio = preSelectedAudio !== null && preSelectedAudio !== undefined;
+        const hasPreSelectedSubtitle = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined;
 
         // Clear state to prevent persistence to future playbacks
         state.set('player:initialMediaSourceId', null);
@@ -908,10 +910,8 @@ class PlayerPage extends Page {
             subtitleMode,
             preSelectedSubtitle
         });
-        let savedAudioIndex =
-            preSelectedAudio !== null && preSelectedAudio !== undefined ? preSelectedAudio : undefined;
-        let savedSubtitleIndex =
-            preSelectedSubtitle !== null && preSelectedSubtitle !== undefined ? preSelectedSubtitle : undefined;
+        let savedAudioIndex = hasPreSelectedAudio ? preSelectedAudio : undefined;
+        let savedSubtitleIndex = hasPreSelectedSubtitle ? preSelectedSubtitle : undefined;
 
         if (savedAudioIndex === undefined && userDataAudioIndex !== undefined) {
             savedAudioIndex = userDataAudioIndex;
@@ -990,44 +990,51 @@ class PlayerPage extends Page {
             seasonPrefApplied: seasonPref.applied
         });
 
+        const explicitInitialTrackSelection = {};
+        if (hasPreSelectedAudio && typeof savedAudioIndex === 'number') {
+            explicitInitialTrackSelection.audioStreamIndex = savedAudioIndex;
+        }
+        if (hasPreSelectedSubtitle && typeof savedSubtitleIndex === 'number') {
+            explicitInitialTrackSelection.subtitleStreamIndex = savedSubtitleIndex;
+        }
+
         // Start playback using the player's internal logic
         // This handles PlaybackInfo fetching, media source selection, and stream URL building
+        const playOptions = {
+            item: item, // Pass full item which might have Chapters
+            itemId: item.Id,
+            userId: api.userId, // Required for playback info
+            startPositionTicks: this._resumePosition,
+            mediaSourceId: mediaSource?.Id,
+            audioStreamIndex: savedAudioIndex,
+            subtitleStreamIndex: savedSubtitleIndex,
+            autoPlay: syncPlayManager.wantsAutoPlay()
+        };
+
+        if (this._forceTranscode) {
+            playOptions.playbackMode = 'transcode';
+            this._forceTranscode = false; // Reset after applying
+        }
+
         try {
-            const playOptions = {
-                item: item, // Pass full item which might have Chapters
-                itemId: item.Id,
-                userId: api.userId, // Required for playback info
-                startPositionTicks: this._resumePosition,
-                mediaSourceId: mediaSource?.Id,
-                audioStreamIndex: savedAudioIndex,
-                subtitleStreamIndex: savedSubtitleIndex,
-                autoPlay: syncPlayManager.wantsAutoPlay()
-            };
-
-            if (this._forceTranscode) {
-                playOptions.playbackMode = 'transcode';
-                this._forceTranscode = false; // Reset after applying
-            }
-
             await this._player.play(playOptions);
         } catch (err) {
             if (err.name === 'NotAllowedError') {
                 log.warn('_startPlayback: Autoplay blocked. Forcing mute and retrying.');
                 this._player.setMuted(true);
                 await this._player.play({
-                    item: item,
-                    itemId: item.Id,
-                    userId: api.userId,
-                    startPositionTicks: this._resumePosition,
-                    mediaSourceId: mediaSource?.Id,
-                    audioStreamIndex: savedAudioIndex,
-                    subtitleStreamIndex: savedSubtitleIndex,
+                    ...playOptions,
                     autoPlay: syncPlayManager.wantsAutoPlay()
                 });
             } else {
                 throw err;
             }
         }
+
+        this._captureInitialExplicitTrackSelection(
+            explicitInitialTrackSelection,
+            this._player?.getCurrentMediaSource?.() || mediaSource
+        );
 
         // ====================================================================
         // WebOS Media Session (System Controls & Metadata)
@@ -1728,14 +1735,35 @@ class PlayerPage extends Page {
      * carried forward to the next episode if 'rememberTracksForSession' is on.
      */
     _captureActiveTrackSelection() {
-        if (PlayerSettings.get('rememberTracksForSession') === false) return;
         if (!this._player || !this._item) return;
 
         const mediaSource = this._player.getCurrentMediaSource?.() || this._item.MediaSources?.[0];
+        this._captureSessionTrackSelection(
+            {
+                audioStreamIndex: this._player._currentAudioStreamIndex,
+                subtitleStreamIndex: this._player._currentSubtitleStreamIndex
+            },
+            mediaSource
+        );
+    }
+
+    _captureInitialExplicitTrackSelection(selection, mediaSource) {
+        if (!selection || Object.keys(selection).length === 0) return;
+
+        log.info('[Track Memory] Capturing explicit initial track selection:', selection);
+        this._captureSessionTrackSelection(selection, mediaSource);
+        this._captureSeasonTrackPref(selection);
+    }
+
+    _captureSessionTrackSelection(data, mediaSource = null) {
+        if (PlayerSettings.get('rememberTracksForSession') === false) return;
+        if (!this._item) return;
+
+        mediaSource = mediaSource || this._player?.getCurrentMediaSource?.() || this._item.MediaSources?.[0];
         if (!mediaSource || !mediaSource.MediaStreams) return;
 
         // 1. Audio Track Capture
-        const activeAudioIndex = this._player._currentAudioStreamIndex;
+        const activeAudioIndex = data?.audioStreamIndex;
         if (activeAudioIndex !== undefined && activeAudioIndex !== -1) {
             const activeAudioTrack = mediaSource.MediaStreams.find(
                 (s) => s.Type === 'Audio' && s.Index === activeAudioIndex
@@ -1751,7 +1779,7 @@ class PlayerPage extends Page {
         }
 
         // 2. Subtitle Track Capture
-        const activeSubtitleIndex = this._player._currentSubtitleStreamIndex;
+        const activeSubtitleIndex = data?.subtitleStreamIndex;
         if (activeSubtitleIndex !== undefined) {
             if (activeSubtitleIndex === -1) {
                 // User explicitly disabled subtitles

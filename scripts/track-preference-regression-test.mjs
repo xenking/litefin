@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fingerprintStream, findMatchingStream } from '../src/utils/TrackFingerprint.js';
 import { resolveUserDataTrackIndex } from '../src/utils/TrackPreferenceResolver.js';
 import { shouldForceSubtitleOffForPlayback } from '../src/utils/SubtitleSelectionPolicy.js';
@@ -389,6 +390,26 @@ globalThis.localStorage = {
         animeAacStreamInfo.url,
         /Static=true/,
         'ordinary multi-audio AAC anime should keep raw Static=true DirectPlay'
+    );
+}
+
+{
+    const playerPageSource = readFileSync(new URL('../src/pages/PlayerPage.js', import.meta.url), 'utf8');
+
+    assert.match(
+        playerPageSource,
+        /const hasPreSelectedSubtitle =\s*preSelectedSubtitle !== null && preSelectedSubtitle !== undefined;/,
+        'PlayerPage should distinguish explicit subtitle picks from restored/default subtitle picks'
+    );
+    assert.match(
+        playerPageSource,
+        /_captureInitialExplicitTrackSelection\(\s*explicitInitialTrackSelection,/,
+        'explicit initial track picks should be captured immediately after playback starts'
+    );
+    assert.match(
+        playerPageSource,
+        /_captureSessionTrackSelection\(selection, mediaSource\);[\s\S]*_captureSeasonTrackPref\(selection\);/,
+        'explicit initial track picks should write through to session and season preference stores'
     );
 }
 

@@ -182,7 +182,6 @@ export class JellyfinPlayer extends EventEmitter {
         this._pendingTranscodeSeekTicks = null; // Target position for initial transcode seek
         this._pendingStartPositionTicks = null; // Target position before first frame
         this._isSeeking = false; // Track seeking state to suppress loading screens during seek
-        this._pendingInitialSubtitleStreamIndex = null; // Deferred ASS setup after webOS decoder starts
 
         // Secondary subtitle stream index (kept here for OSD queries)
         this._currentSecondarySubtitleStreamIndex = -1;
@@ -420,8 +419,6 @@ export class JellyfinPlayer extends EventEmitter {
             }
         }
 
-        this._flushDeferredInitialSubtitleSetupForEvent(event);
-
         // Sync internal state
         if (event.type === PlayerEvent.PAUSE) {
             this._isPaused = true;
@@ -499,61 +496,11 @@ export class JellyfinPlayer extends EventEmitter {
         this.emit(event.type, event.data);
     }
 
-    _isWebOSDirectPlayAssInitialSubtitle({ index, mediaSource, playMethod, autoPlay, isAudioItem }) {
-        if (isAudioItem) return false;
-        if (index === undefined || index === null || Number(index) < 0) return false;
-        if (this._backendType !== 'webos') return false;
-        if (playMethod !== 'DirectPlay') return false;
-        if (autoPlay === false) return false;
-
-        const subtitleTrack = mediaSource?.MediaStreams?.find((stream) => (
-            stream.Type === 'Subtitle' && Number(stream.Index) === Number(index)
-        ));
-        const codec = (subtitleTrack?.Codec || '').toLowerCase();
-        return codec === 'ass' || codec === 'ssa';
-    }
-
-    _deferInitialSubtitleSetup(index) {
-        this._pendingInitialSubtitleStreamIndex = index;
-        log.info(`Deferring initial ASS subtitle setup until webOS playback starts moving: ${index}`);
-    }
-
-    _clearDeferredInitialSubtitleSetup() {
-        this._pendingInitialSubtitleStreamIndex = null;
-    }
-
     _startInitialSubtitleSetup(index, reason) {
         this._playSetupInProgress = true;
         this.setSubtitleStreamIndex(index)
             .catch((err) => log.warn(`Initial subtitle setup failed (${reason}):`, err))
             .finally(() => { this._playSetupInProgress = false; });
-    }
-
-    _flushDeferredInitialSubtitleSetup(reason) {
-        if (this._pendingInitialSubtitleStreamIndex === null || this._pendingInitialSubtitleStreamIndex === undefined) {
-            return false;
-        }
-
-        const index = this._pendingInitialSubtitleStreamIndex;
-        this._pendingInitialSubtitleStreamIndex = null;
-        log.info(`Starting deferred initial ASS subtitle setup after ${reason}: ${index}`);
-        this._startInitialSubtitleSetup(index, reason);
-        return true;
-    }
-
-    _flushDeferredInitialSubtitleSetupForEvent(event) {
-        if (this._pendingInitialSubtitleStreamIndex === null || this._pendingInitialSubtitleStreamIndex === undefined) {
-            return;
-        }
-
-        if (event.type === PlayerEvent.PLAYING) {
-            this._flushDeferredInitialSubtitleSetup('playing');
-            return;
-        }
-
-        if (event.type === PlayerEvent.TIME_UPDATE && event.data?.time > 0.25) {
-            this._flushDeferredInitialSubtitleSetup(`timeupdate:${event.data.time}`);
-        }
     }
 
     // ========================================================================
@@ -575,7 +522,6 @@ export class JellyfinPlayer extends EventEmitter {
         //log.info('Play requested:', options);
         log.info('Backend Type:', this._backendType);
         log.info('Use Tizen Player:', this.useTizenPlayer);
-        this._clearDeferredInitialSubtitleSetup();
         
         // Update server URL/Auth if provided in play options
         if (options.serverUrl) this.serverUrl = options.serverUrl;
@@ -1195,18 +1141,8 @@ export class JellyfinPlayer extends EventEmitter {
                 // text, parse ASS, etc.). Setting _playSetupInProgress=true tells
                 // setSubtitleStreamIndex to skip any restart-triggering logic — the
                 // server already has the correct subtitle in its transcode session.
-                if (this._isWebOSDirectPlayAssInitialSubtitle({
-                    index: this._currentSubtitleStreamIndex,
-                    mediaSource,
-                    playMethod,
-                    autoPlay: options.autoPlay,
-                    isAudioItem: isAudioItemSetup
-                })) {
-                    this._deferInitialSubtitleSetup(this._currentSubtitleStreamIndex);
-                } else {
-                    // Fire-and-forget — don't block playback on subtitle fetch
-                    this._startInitialSubtitleSetup(this._currentSubtitleStreamIndex, 'play');
-                }
+                // Fire-and-forget — don't block playback on subtitle fetch.
+                this._startInitialSubtitleSetup(this._currentSubtitleStreamIndex, 'play');
             }
         } catch (error) {
             log.error('Playback error caught:', error);
@@ -1247,8 +1183,6 @@ export class JellyfinPlayer extends EventEmitter {
      * Stop playback
      */
     async stop() {
-        this._clearDeferredInitialSubtitleSetup();
-
         if (this._backend) {
             await this._backend.stop();
         }
@@ -1513,10 +1447,6 @@ export class JellyfinPlayer extends EventEmitter {
      * @param {number} index - Subtitle stream index (-1 to disable)
      */
     async setSubtitleStreamIndex(index) {
-        if (!this._playSetupInProgress) {
-            this._clearDeferredInitialSubtitleSetup();
-        }
-
         this._currentSubtitleStreamIndex = index;
 
         // =====================================================================
@@ -2542,7 +2472,6 @@ export class JellyfinPlayer extends EventEmitter {
      */
     destroy() {
         log.info('destroy() called');
-        this._clearDeferredInitialSubtitleSetup();
         this.stop();
 
         // Destroy subtitle manager BEFORE the backend — the PGS download loop
