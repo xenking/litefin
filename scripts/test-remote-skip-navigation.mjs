@@ -66,13 +66,23 @@ assert.match(
 );
 assert.match(
     playerPageSource,
-    /_onRemoteChannelUp\(\) \{[\s\S]*direction: 'next'[\s\S]*if \(action === 'nextChapter'\) \{[\s\S]*this\._handleHardwareSkip\('next'\)[\s\S]*if \(action !== 'nextChannel'\)/,
-    'channel up rocker must prefer chapters for VOD and must not fall back to episode skip'
+    /_onRemoteChannelUp\(\) \{[\s\S]*if \(PlayerSettings\.get\('channelRockerJumpsChapters'\)\) \{[\s\S]*direction: 'next'[\s\S]*if \(action === 'nextChapter'\) \{[\s\S]*this\._handleHardwareSkip\('next'\)[\s\S]*if \(action !== 'nextChannel'\)/,
+    'channel up rocker must prefer chapters for VOD only when the channel-rocker chapter setting is enabled'
 );
 assert.match(
     playerPageSource,
-    /_onRemoteChannelDown\(\) \{[\s\S]*direction: 'previous'[\s\S]*if \(action === 'previousChapter'\) \{[\s\S]*this\._handleHardwareSkip\('previous'\)[\s\S]*if \(action !== 'previousChannel'\)/,
-    'channel down rocker must prefer chapters for VOD and must not fall back to episode skip'
+    /_onRemoteChannelDown\(\) \{[\s\S]*if \(PlayerSettings\.get\('channelRockerJumpsChapters'\)\) \{[\s\S]*direction: 'previous'[\s\S]*if \(action === 'previousChapter'\) \{[\s\S]*this\._handleHardwareSkip\('previous'\)[\s\S]*if \(action !== 'previousChannel'\)/,
+    'channel down rocker must prefer chapters for VOD only when the channel-rocker chapter setting is enabled'
+);
+assert.match(
+    playerPageSource,
+    /_onRemoteChannelUp\(\) \{[\s\S]*else if \(this\._item\?\.Type !== 'TvChannel'\) \{[\s\S]*chapter rocker disabled[\s\S]*return;[\s\S]*this\._handleChannelChange\(1\)/,
+    'channel up rocker must ignore VOD when the chapter setting is disabled while keeping Live TV channel switching'
+);
+assert.match(
+    playerPageSource,
+    /_onRemoteChannelDown\(\) \{[\s\S]*else if \(this\._item\?\.Type !== 'TvChannel'\) \{[\s\S]*chapter rocker disabled[\s\S]*return;[\s\S]*this\._handleChannelChange\(-1\)/,
+    'channel down rocker must ignore VOD when the chapter setting is disabled while keeping Live TV channel switching'
 );
 assert.doesNotMatch(
     playerPageSource,

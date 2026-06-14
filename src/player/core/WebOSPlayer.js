@@ -1392,47 +1392,23 @@ export class WebOSPlayer {
             // FAST PATH: Decoder hiccup — buffer is healthy, network is fine.
             // ────────────────────────────────────────────────────────────────
 
-            // ── Re-stall loop detection ───────────────────────────────────
-            // If we already fired a recovery kick within the last 15 s,
-            // another kick risks creating a seek → stall → seek feedback
-            // loop. Suppress the kick and let the decoder self-recover.
             const RECOVERY_COOLDOWN_MS = 15000;
             const timeSinceLastKick = Date.now() - this._lastRecoveryKickTime;
             const inCooldown = this._lastRecoveryKickTime > 0 && timeSinceLastKick < RECOVERY_COOLDOWN_MS;
-
-            if (inCooldown) {
-                log.info(
-                    'WebOSPlayer: Stall detected but recovery cooldown active (' +
-                    Math.round(timeSinceLastKick / 1000) + 's since last kick) — ' +
-                    'suppressing kick to break stall loop, letting decoder self-recover'
-                );
-                return;
-            }
-
-            // DoVi content gets a longer window (4 s) because the DoVi
-            // decoder frequently needs 2–3 s to re-sync the RPU layer
-            // with the base layer after a hiccup. Kicking at 1.5 s
-            // interrupts this self-recovery.
             const fastDelay = isDoVi ? 4000 : 1500;
 
-            this._stallTimer = setTimeout(() => {
-                if (!this._videoElement || this._videoElement.paused || !this._started) return;
-
-                // ── Self-recovery detection ──────────────────────────────
-                // If currentTime has advanced since the stall was detected,
-                // the decoder recovered on its own — even if the 'playing'
-                // event didn't fire (WebOS Chromium event timing is unreliable).
-                // Skip the recovery action entirely to avoid disrupting
-                // playback that's already working.
+            const recoveredSinceStall = (context) => {
                 const timeNow = this._videoElement.currentTime;
-                if (timeNow > timeAtStall + 0.1) {
-                    log.info(
-                        'WebOSPlayer: Decoder self-recovered (currentTime advanced +' +
-                        (timeNow - timeAtStall).toFixed(1) + 's) — no recovery kick needed'
-                    );
-                    return;
-                }
+                if (timeNow <= timeAtStall + 0.1) return false;
 
+                log.info(
+                    'WebOSPlayer: Decoder self-recovered ' + context + ' (currentTime advanced +' +
+                    (timeNow - timeAtStall).toFixed(1) + 's) — no recovery kick needed'
+                );
+                return true;
+            };
+
+            const kickStuckDecoder = (context) => {
                 const bufferNow = this._getBufferAhead();
 
                 if (isDoVi) {
@@ -1441,7 +1417,7 @@ export class WebOSPlayer {
                     // without triggering an IDR re-init. This avoids the
                     // stall loop caused by seeks on DoVi content.
                     log.warn(
-                        'WebOSPlayer: DoVi decoder genuinely stuck — stalled ' + (fastDelay / 1000) + 's with',
+                        'WebOSPlayer: DoVi decoder genuinely stuck — ' + context + ' with',
                         bufferNow.toFixed(1),
                         's buffered, currentTime frozen — attempting pause/play flush'
                     );
@@ -1463,7 +1439,7 @@ export class WebOSPlayer {
                 } else {
                     // ── Standard HEVC recovery: currentTime kick ─────────
                     log.warn(
-                        'WebOSPlayer: Decoder hiccup — stalled 1.5s with',
+                        'WebOSPlayer: Decoder hiccup — ' + context + ' with',
                         bufferNow.toFixed(1),
                         's buffered — fast recovery kick (+0.5s)'
                     );
@@ -1474,6 +1450,40 @@ export class WebOSPlayer {
                         log.error('WebOSPlayer: Fast recovery kick failed', e);
                     }
                 }
+            };
+
+            if (inCooldown) {
+                const retryDelay = Math.max(1000, RECOVERY_COOLDOWN_MS - timeSinceLastKick);
+                log.info(
+                    'WebOSPlayer: Stall detected but recovery cooldown active (' +
+                    Math.round(timeSinceLastKick / 1000) + 's since last kick) — ' +
+                    'delaying recovery retry ' + Math.round(retryDelay / 1000) + 's'
+                );
+                this._stallTimer = setTimeout(() => {
+                    if (!this._videoElement || this._videoElement.paused || !this._started) return;
+                    if (recoveredSinceStall('during recovery cooldown')) return;
+
+                    kickStuckDecoder('still stalled after recovery cooldown');
+                }, retryDelay);
+                return;
+            }
+
+            // DoVi content gets a longer window (4 s) because the DoVi
+            // decoder frequently needs 2–3 s to re-sync the RPU layer
+            // with the base layer after a hiccup. Kicking at 1.5 s
+            // interrupts this self-recovery.
+            this._stallTimer = setTimeout(() => {
+                if (!this._videoElement || this._videoElement.paused || !this._started) return;
+
+                // ── Self-recovery detection ──────────────────────────────
+                // If currentTime has advanced since the stall was detected,
+                // the decoder recovered on its own — even if the 'playing'
+                // event didn't fire (WebOS Chromium event timing is unreliable).
+                // Skip the recovery action entirely to avoid disrupting
+                // playback that's already working.
+                if (recoveredSinceStall('before fast recovery')) return;
+
+                kickStuckDecoder('stalled ' + (fastDelay / 1000) + 's');
             }, fastDelay);
 
         } else {

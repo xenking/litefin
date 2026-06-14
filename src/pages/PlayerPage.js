@@ -2949,19 +2949,24 @@ class PlayerPage extends Page {
      */
     _onRemoteChannelUp() {
         log.info('Remote: Channel Up');
-        const action = getChapterAwareSkipAction({
-            direction: 'next',
-            item: this._item,
-            player: this._player
-        });
+        if (PlayerSettings.get('channelRockerJumpsChapters')) {
+            const action = getChapterAwareSkipAction({
+                direction: 'next',
+                item: this._item,
+                player: this._player
+            });
 
-        if (action === 'nextChapter') {
-            this._handleHardwareSkip('next');
-            return;
-        }
+            if (action === 'nextChapter') {
+                this._handleHardwareSkip('next');
+                return;
+            }
 
-        if (action !== 'nextChannel') {
-            log.debug(`Channel Up ignored for non-channel playback (${action})`);
+            if (action !== 'nextChannel') {
+                log.debug(`Channel Up ignored for non-channel playback (${action})`);
+                return;
+            }
+        } else if (this._item?.Type !== 'TvChannel') {
+            log.debug('Channel Up ignored for non-channel playback (chapter rocker disabled)');
             return;
         }
 
@@ -2970,19 +2975,24 @@ class PlayerPage extends Page {
 
     _onRemoteChannelDown() {
         log.info('Remote: Channel Down');
-        const action = getChapterAwareSkipAction({
-            direction: 'previous',
-            item: this._item,
-            player: this._player
-        });
+        if (PlayerSettings.get('channelRockerJumpsChapters')) {
+            const action = getChapterAwareSkipAction({
+                direction: 'previous',
+                item: this._item,
+                player: this._player
+            });
 
-        if (action === 'previousChapter') {
-            this._handleHardwareSkip('previous');
-            return;
-        }
+            if (action === 'previousChapter') {
+                this._handleHardwareSkip('previous');
+                return;
+            }
 
-        if (action !== 'previousChannel') {
-            log.debug(`Channel Down ignored for non-channel playback (${action})`);
+            if (action !== 'previousChannel') {
+                log.debug(`Channel Down ignored for non-channel playback (${action})`);
+                return;
+            }
+        } else if (this._item?.Type !== 'TvChannel') {
+            log.debug('Channel Down ignored for non-channel playback (chapter rocker disabled)');
             return;
         }
 
