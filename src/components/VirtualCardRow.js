@@ -4,6 +4,8 @@ import { eventBus } from '../core/EventBus.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
 import { storage } from '../utils/StorageService.js';
 
+const DEFAULT_MODERN_CARD_SIZE_SCALE = 1.3;
+
 export class VirtualCardRow {
     /**
      * @param {HTMLElement} trackContainer - The `.row-items-track` wrapper element
@@ -40,11 +42,11 @@ export class VirtualCardRow {
         const isModern = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
         this.isModern = isModern;
         const scale = isModern
-            ? parseFloat(storage.getItem('pref:modernCardSizeScale')) || 1.3
+            ? parseFloat(storage.getItem('pref:modernCardSizeScale')) || DEFAULT_MODERN_CARD_SIZE_SCALE
             : parseFloat(storage.getItem('pref:classicCardSizeScale')) || 1.0;
 
         if (isModern) {
-            const modernMultiplier = scale / 1.5;
+            const modernMultiplier = scale / DEFAULT_MODERN_CARD_SIZE_SCALE;
             this.modernMultiplier = modernMultiplier;
 
             // Target Height: 600px * 56.25% (16:9) = 337.5px

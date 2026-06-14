@@ -58,6 +58,7 @@ const log = logger.create('HomePage');
  * Keeps memory usage bounded to roughly one screen-worth.
  */
 const IMAGE_PREWARM_PER_ROW = 10;
+const DEFAULT_MODERN_CARD_SIZE_SCALE = 1.3;
 
 function getHomeResumeDedupKey(item) {
     if (!item) return null;
@@ -836,8 +837,9 @@ class HomePage extends Page {
             // Set size variables for skeletons based on active card size scale
             const isModern = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
             if (isModern) {
-                const scale = parseFloat(storage.getItem('pref:modernCardSizeScale')) || 1.3;
-                const modernMultiplier = scale / 1.5;
+                const scale =
+                    parseFloat(storage.getItem('pref:modernCardSizeScale')) || DEFAULT_MODERN_CARD_SIZE_SCALE;
+                const modernMultiplier = scale / DEFAULT_MODERN_CARD_SIZE_SCALE;
                 const itemMargin = Math.round(40 * modernMultiplier);
                 sectionEl.style.setProperty('--card-width', `${Math.round(225 * modernMultiplier)}px`);
                 sectionEl.style.setProperty('--card-height', `${Math.round(337.5 * modernMultiplier)}px`);

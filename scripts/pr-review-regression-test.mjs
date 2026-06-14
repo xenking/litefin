@@ -18,6 +18,42 @@ assert.doesNotMatch(
 );
 
 const virtualCardRow = read('src/components/VirtualCardRow.js');
+assert.match(
+    virtualCardRow,
+    /const DEFAULT_MODERN_CARD_SIZE_SCALE = 1\.3;/,
+    'VirtualCardRow should define the modern card scale default once'
+);
+assert.match(
+    virtualCardRow,
+    /parseFloat\(storage\.getItem\('pref:modernCardSizeScale'\)\) \|\| DEFAULT_MODERN_CARD_SIZE_SCALE/,
+    'VirtualCardRow should use the same modern scale default as Settings'
+);
+assert.match(
+    virtualCardRow,
+    /const modernMultiplier = scale \/ DEFAULT_MODERN_CARD_SIZE_SCALE;/,
+    'VirtualCardRow should normalize modern dimensions against the 1.3 default'
+);
+assert.doesNotMatch(
+    virtualCardRow,
+    /const modernMultiplier = scale \/ 1\.5;/,
+    'VirtualCardRow should not shrink the default modern row layout by dividing by 1.5'
+);
+const homePage = read('src/pages/HomePage.js');
+assert.match(
+    homePage,
+    /const DEFAULT_MODERN_CARD_SIZE_SCALE = 1\.3;/,
+    'HomePage skeleton rows should share the modern card scale default'
+);
+assert.match(
+    homePage,
+    /const modernMultiplier = scale \/ DEFAULT_MODERN_CARD_SIZE_SCALE;/,
+    'HomePage skeleton rows should normalize modern dimensions against the 1.3 default'
+);
+assert.doesNotMatch(
+    homePage,
+    /const modernMultiplier = scale \/ 1\.5;/,
+    'HomePage skeleton rows should not shrink the default modern row layout by dividing by 1.5'
+);
 const scaledExpandedWidthMatches =
     virtualCardRow.match(
         /canExpand \? Math\.round\(600 \* \(this\.modernMultiplier \|\| 1\.0\)\) : this\.itemWidth/g
@@ -42,6 +78,18 @@ assert.match(
     scrollController,
     /elementWidth = canExpand\s*\?\s*Math\.round\(600 \* \(track\.__virtualRow\.modernMultiplier \|\| 1\.0\)\)\s*:\s*track\.__virtualRow\.itemWidth/s,
     'ScrollController should center expanded virtual cards using VirtualCardRow modernMultiplier'
+);
+
+const cardRenderer = read('src/utils/CardRenderer.js');
+assert.match(
+    cardRenderer,
+    /const isModernRowsEnabled = document\.documentElement\.getAttribute\('data-layout-media-rows'\) === 'modern';/,
+    'CardRenderer should read the media-row layout flag separately from card context'
+);
+assert.match(
+    cardRenderer,
+    /const isModern = isModernRowsEnabled && !isGrid;/,
+    'CardRenderer should apply row-only modern card behavior only outside grid rendering'
 );
 
 const tizenProfile = read('src/api/profiles/TizenProfile.js');
@@ -177,7 +225,6 @@ assert.match(
     'ApiClient should append quality badge fields when the quality badge preference is enabled'
 );
 
-const cardRenderer = read('src/utils/CardRenderer.js');
 assert.match(
     cardRenderer,
     /item\.MediaStreams\?\.find\(\(s\) => s\.Type === 'Video'\)/,

@@ -24,7 +24,8 @@ class CardRenderer {
      */
     static createCardHtml(item, options = {}) {
         const { isLandscape = false, type = 'poster', contextType = null, isGrid = false } = options;
-        const isModern = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
+        const isModernRowsEnabled = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
+        const isModern = isModernRowsEnabled && !isGrid;
 
         let imageUrl = '';
         let imageInnerHtml = '';
