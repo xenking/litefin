@@ -131,4 +131,11 @@ assert.doesNotMatch(
     'LayoutManager auto badge style should not use stale compatibility layout state'
 );
 
+const libraryPage = read('src/pages/LibraryPage.js');
+assert.match(
+    libraryPage,
+    /if \(\s*itemType === 'Audio' \|\| this\.state\.viewType === 'Songs'\s*\) \{[\s\S]*router\.navigate\(`\/player\/\$\{itemId\}\/false`\);[\s\S]*return;/,
+    'LibraryPage should start Audio/Songs cards directly instead of routing them to details'
+);
+
 console.log('OK: PR review regressions passed');

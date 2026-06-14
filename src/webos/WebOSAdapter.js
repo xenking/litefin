@@ -258,10 +258,10 @@ class WebOSAdapter {
                     eventBus.emit('key:fastForward', e);
                     break;
                 case WEBOS_KEYS.NEXT:
-                    eventBus.emit('key:next', e);
+                    eventBus.emit('key:channelUp', e);
                     break;
                 case WEBOS_KEYS.PREV:
-                    eventBus.emit('key:previous', e);
+                    eventBus.emit('key:channelDown', e);
                     break;
 
                 case WEBOS_KEYS.RED:

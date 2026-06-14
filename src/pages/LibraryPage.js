@@ -2633,6 +2633,12 @@ class LibraryPage extends Page {
 
         // Special handling for Persons and Artists: navigate to the unified PersonPage
         const itemType = card.dataset.type;
+        if (itemType === 'Audio' || this.state.viewType === 'Songs') {
+            log.info('Playing audio item:', itemId);
+            router.navigate(`/player/${itemId}/false`);
+            return;
+        }
+
         if (
             itemType === 'Person' ||
             itemType === 'MusicArtist' ||

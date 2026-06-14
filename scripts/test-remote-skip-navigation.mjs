@@ -7,22 +7,38 @@ const videoItem = { Type: 'Episode', MediaType: 'Video' };
 const audioItem = { Type: 'Audio', MediaType: 'Audio' };
 const liveTvItem = { Type: 'TvChannel', MediaType: 'Video' };
 
-const chapteredPlayer = {
+const makeChapteredPlayer = (currentPositionTicks) => ({
     getChapters: () => [{ StartPositionTicks: 0 }, { StartPositionTicks: 600000000 }],
+    getCurrentPositionTicks: () => currentPositionTicks,
     nextChapter() {},
     previousChapter() {}
-};
+});
+
+const firstChapterPlayer = makeChapteredPlayer(300000000);
+const lastChapterPlayer = makeChapteredPlayer(700000000);
 
 assert.equal(
-    getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: chapteredPlayer }),
+    getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: firstChapterPlayer }),
     'nextChapter',
-    'next skip should prefer chapters when the current video exposes chapters'
+    'next skip should prefer chapters when a later chapter exists'
 );
 
 assert.equal(
-    getChapterAwareSkipAction({ direction: 'previous', item: videoItem, player: chapteredPlayer }),
+    getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: lastChapterPlayer }),
+    'nextTrack',
+    'next skip should fall back to the queue at the final chapter'
+);
+
+assert.equal(
+    getChapterAwareSkipAction({ direction: 'previous', item: videoItem, player: lastChapterPlayer }),
     'previousChapter',
-    'previous skip should prefer chapters when the current video exposes chapters'
+    'previous skip should prefer chapters when an earlier chapter exists'
+);
+
+assert.equal(
+    getChapterAwareSkipAction({ direction: 'previous', item: videoItem, player: firstChapterPlayer }),
+    'previousChapter',
+    'previous skip should keep chapter restart semantics at the first chapter'
 );
 
 assert.equal(
@@ -36,19 +52,19 @@ assert.equal(
 );
 
 assert.equal(
-    getChapterAwareSkipAction({ direction: 'next', item: audioItem, player: chapteredPlayer }),
+    getChapterAwareSkipAction({ direction: 'next', item: audioItem, player: firstChapterPlayer }),
     'nextTrack',
     'audio playback should keep track skip semantics even if chapter-like metadata exists'
 );
 
 assert.equal(
-    getChapterAwareSkipAction({ direction: 'next', item: liveTvItem, player: chapteredPlayer }),
+    getChapterAwareSkipAction({ direction: 'next', item: liveTvItem, player: firstChapterPlayer }),
     'nextChannel',
     'live TV should keep channel rocker semantics'
 );
 
 assert.equal(
-    getChapterAwareSkipAction({ direction: 'previous', item: liveTvItem, player: chapteredPlayer }),
+    getChapterAwareSkipAction({ direction: 'previous', item: liveTvItem, player: firstChapterPlayer }),
     'previousChannel',
     'live TV should keep channel rocker semantics'
 );
@@ -123,15 +139,30 @@ assert.match(
 );
 
 const webosAdapterSource = readFileSync(new URL('../src/webos/WebOSAdapter.js', import.meta.url), 'utf8');
-assert.doesNotMatch(
-    webosAdapterSource,
-    /case WEBOS_KEYS\.NEXT:[\s\S]*?eventBus\.emit\('key:channelUp'/,
-    'WebOS NEXT must not emit a second channelUp event after key:next'
+const webosCaseBody = (key) =>
+    webosAdapterSource.match(new RegExp(`case WEBOS_KEYS\\.${key}:([\\s\\S]*?)break;`))?.[1] || '';
+const webosNextCase = webosCaseBody('NEXT');
+const webosPrevCase = webosCaseBody('PREV');
+
+assert.match(
+    webosNextCase,
+    /eventBus\.emit\('key:channelUp'/,
+    'WebOS NEXT/PageUp must use the channel rocker handler so channelRockerJumpsChapters gates VOD chapter jumps'
 );
 assert.doesNotMatch(
-    webosAdapterSource,
-    /case WEBOS_KEYS\.PREV:[\s\S]*?eventBus\.emit\('key:channelDown'/,
-    'WebOS PREV must not emit a second channelDown event after key:previous'
+    webosNextCase,
+    /eventBus\.emit\('key:next'/,
+    'WebOS NEXT/PageUp must not bypass channelRockerJumpsChapters through key:next'
+);
+assert.match(
+    webosPrevCase,
+    /eventBus\.emit\('key:channelDown'/,
+    'WebOS PREV/PageDown must use the channel rocker handler so channelRockerJumpsChapters gates VOD chapter jumps'
+);
+assert.doesNotMatch(
+    webosPrevCase,
+    /eventBus\.emit\('key:previous'/,
+    'WebOS PREV/PageDown must not bypass channelRockerJumpsChapters through key:previous'
 );
 
 console.log('remote skip navigation regression checks passed');
