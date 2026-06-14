@@ -216,8 +216,7 @@ class LayoutManager {
         }
         // Update badge style if it is auto
         if (this._badgeStyle === 'auto') {
-            const resolvedStyle = layout === 'modern' ? 'dark' : 'tinted';
-            document.documentElement.setAttribute('data-badge-style', resolvedStyle);
+            document.documentElement.setAttribute('data-badge-style', this._resolveBadgeStyle(this._badgeStyle));
         }
         eventBus.emit('mediaRowsLayout:changed', { layout });
     }
@@ -458,12 +457,15 @@ class LayoutManager {
     getBadgeStyle() {
         return this._badgeStyle;
     }
+
+    _resolveBadgeStyle(style) {
+        if (style !== 'auto') return style;
+        return this._mediaRowsLayout === 'modern' ? 'dark' : 'tinted';
+    }
+
     setBadgeStyle(style, save = true) {
         this._badgeStyle = style;
-        let resolvedStyle = style;
-        if (style === 'auto') {
-            resolvedStyle = this._layout === 'modern' ? 'dark' : 'tinted';
-        }
+        const resolvedStyle = this._resolveBadgeStyle(style);
         document.documentElement.setAttribute('data-badge-style', resolvedStyle);
         if (save) storage.setItem('litefin:badgeStyle', style);
         log.info(`Badge style set to: ${style} (resolved: ${resolvedStyle})`);

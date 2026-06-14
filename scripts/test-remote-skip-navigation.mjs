@@ -101,8 +101,13 @@ assert.match(
 );
 assert.match(
     playerPageSource,
+    /onBack\(\) \{[\s\S]*this\._osd\?\.hasBackMenu\?\.\(\)[\s\S]*this\._osd\.handleBack\(\)[\s\S]*this\._stopAndExit\(true, 'remoteBack'\)/,
+    'physical Back should close OSD menus first, then exit playback through remoteBack'
+);
+assert.doesNotMatch(
+    playerPageSource,
     /handleBack\?\.\(\{ exitWhenOsdVisible: true \}\)/,
-    'physical Back on the player must exit instead of only hiding visible OSD controls'
+    'physical Back should not route playback exit through the generic OSD exit action'
 );
 assert.match(
     playerPageSource,
@@ -113,8 +118,8 @@ assert.match(
 const osdControllerSource = readFileSync(new URL('../src/player/osd/OSDController.js', import.meta.url), 'utf8');
 assert.match(
     osdControllerSource,
-    /exitWhenOsdVisible/,
-    'OSD back handling must expose a physical-back mode distinct from internal OSD back'
+    /hasBackMenu\(\) \{[\s\S]*return Boolean\(this\.activeMenu && this\.activeMenu\.isVisible\);/,
+    'OSDController should expose whether Back can be consumed by an open menu'
 );
 
 const webosAdapterSource = readFileSync(new URL('../src/webos/WebOSAdapter.js', import.meta.url), 'utf8');

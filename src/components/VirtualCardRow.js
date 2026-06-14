@@ -670,7 +670,7 @@ export class VirtualCardRow {
         this._updateWindow(this.currentIndex);
 
         const elementPos = this.getItemPosition(clamped);
-        const isModern = document.documentElement.getAttribute('data-layout') === 'modern';
+        const isModern = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
         const canExpand = isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
         const elementWidth = canExpand ? Math.round(600 * (this.modernMultiplier || 1.0)) : this.itemWidth;
         const containerWidth = this.track.parentElement ? this.track.parentElement.clientWidth : window.innerWidth;

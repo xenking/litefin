@@ -1779,6 +1779,10 @@ export default class OSDController extends Component {
         return this._handleBack(options);
     }
 
+    hasBackMenu() {
+        return Boolean(this.activeMenu && this.activeMenu.isVisible);
+    }
+
     _handleBack(options = {}) {
         const exitWhenOsdVisible = options.exitWhenOsdVisible === true;
 

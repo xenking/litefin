@@ -929,18 +929,28 @@ html[data-card-label-style="hidden"] .genre-grid-items {
    Card Labels Alignment Adjustments
    ============================================================================ */
 
-/* Card Labels Alignment Adjustments (excluding list-views) */
-html[data-card-label-align="start"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-title,
-html[data-card-label-align="start"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-subtitle {
+/* Card Labels Alignment Adjustments */
+html[data-card-label-align="start"] .media-card:not(.list-skeleton) .card-title,
+html[data-card-label-align="start"] .media-card:not(.list-skeleton) .card-subtitle {
     text-align: start !important;
 }
-html[data-card-label-align="end"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-title,
-html[data-card-label-align="end"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-subtitle {
+html[data-card-label-align="end"] .media-card:not(.list-skeleton) .card-title,
+html[data-card-label-align="end"] .media-card:not(.list-skeleton) .card-subtitle {
     text-align: end !important;
 }
-html[data-card-label-align="center"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-title,
-html[data-card-label-align="center"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-subtitle {
+html[data-card-label-align="center"] .media-card:not(.list-skeleton) .card-title,
+html[data-card-label-align="center"] .media-card:not(.list-skeleton) .card-subtitle {
     text-align: center !important;
+}
+
+/* List views keep their own fixed label alignment; avoid Selectors Level 4 :not() syntax. */
+html[data-card-label-align="start"] .view-list .media-card .card-title,
+html[data-card-label-align="start"] .view-list .media-card .card-subtitle,
+html[data-card-label-align="end"] .view-list .media-card .card-title,
+html[data-card-label-align="end"] .view-list .media-card .card-subtitle,
+html[data-card-label-align="center"] .view-list .media-card .card-title,
+html[data-card-label-align="center"] .view-list .media-card .card-subtitle {
+    text-align: start !important;
 }
 
 /* Skeleton loader lines alignment (excluding list-views) */
@@ -967,8 +977,8 @@ html[data-card-label-align="center"] .media-card:not(.list-skeleton) .skeleton-l
     margin-right: auto !important;
 }
 
-/* Title Only 2 Lines Wrapping Override (excluding list-views) */
-html[data-card-label-style="titleOnly2Lines"] .media-card:not(.list-skeleton):not(.view-list .media-card) .card-title {
+/* Title Only 2 Lines Wrapping Override */
+html[data-card-label-style="titleOnly2Lines"] .media-card:not(.list-skeleton) .card-title {
     white-space: normal !important;
     display: -webkit-box !important;
     -webkit-line-clamp: 2 !important;
@@ -978,4 +988,13 @@ html[data-card-label-style="titleOnly2Lines"] .media-card:not(.list-skeleton):no
     text-overflow: ellipsis !important;
     line-height: 1.25 !important;
     max-height: 2.5em !important;
+}
+
+html[data-card-label-style="titleOnly2Lines"] .view-list .media-card .card-title {
+    white-space: nowrap !important;
+    display: block !important;
+    -webkit-line-clamp: 1 !important;
+    line-clamp: 1 !important;
+    -webkit-box-orient: initial !important;
+    max-height: 1.25em !important;
 }

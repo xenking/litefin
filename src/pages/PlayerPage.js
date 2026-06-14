@@ -2738,14 +2738,14 @@ class PlayerPage extends Page {
         }
 
         // Physical platform Back closes an open OSD menu first; otherwise it exits
-        // the player immediately instead of only hiding the visible controls.
-        if (this._osd?.handleBack?.({ exitWhenOsdVisible: true })) {
-            log.info('OSD handled back event');
+        // the player via the remoteBack route instead of the generic OSD exit action.
+        if (this._osd?.hasBackMenu?.()) {
+            this._osd.handleBack();
+            log.info('OSD menu handled back event');
             return true;
         }
 
-        log.info('OSD did not handle back, calling _stopAndExit()');
-        // OSD is hidden and no menu is open — stop playback and go back
+        log.info('No OSD menu open, calling _stopAndExit(remoteBack)');
         this._stopAndExit(true, 'remoteBack');
         return true;
     }
