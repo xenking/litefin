@@ -1200,7 +1200,19 @@ export default class OSDController extends Component {
             this._currentFocusRow = 1; 
             const playIdx = this._findActionIndex('togglePlay');
             this._currentFocusIndex = playIdx !== -1 ? playIdx : 0;
-            this._updateFocus();
+
+            this._focusRestoreLockout = true;
+            if (this._focusRestoreLockoutTimer) {
+                clearTimeout(this._focusRestoreLockoutTimer);
+            }
+            this._focusRestoreLockoutTimer = setTimeout(() => {
+                this._focusRestoreLockout = false;
+                this._focusRestoreLockoutTimer = null;
+            }, 350);
+
+            setTimeout(() => {
+                this._updateFocus();
+            }, 50);
         }
     }
 
@@ -1233,7 +1245,19 @@ export default class OSDController extends Component {
             this._currentFocusRow = 1; // Controls
             const playIdx = this._findActionIndex('togglePlay');
             this._currentFocusIndex = playIdx !== -1 ? playIdx : 0;
-            this._updateFocus();
+
+            this._focusRestoreLockout = true;
+            if (this._focusRestoreLockoutTimer) {
+                clearTimeout(this._focusRestoreLockoutTimer);
+            }
+            this._focusRestoreLockoutTimer = setTimeout(() => {
+                this._focusRestoreLockout = false;
+                this._focusRestoreLockoutTimer = null;
+            }, 350);
+
+            setTimeout(() => {
+                this._updateFocus();
+            }, 50);
         }
     }
 
@@ -1751,11 +1775,17 @@ export default class OSDController extends Component {
 
 
     // Public API for PlayerPage
-    handleBack() {
-        return this._handleBack();
+    handleBack(options = {}) {
+        return this._handleBack(options);
     }
 
-    _handleBack() {
+    hasBackMenu() {
+        return Boolean(this.activeMenu && this.activeMenu.isVisible);
+    }
+
+    _handleBack(options = {}) {
+        const exitWhenOsdVisible = options.exitWhenOsdVisible === true;
+
         if (this.activeMenu && this.activeMenu.isVisible) {
             // Priority: Try to let the active menu handle the 'back' key itself.
             // This allows sub-menus to return to their parent menus (e.g. Sub-menu -> Settings).
@@ -1778,7 +1808,7 @@ export default class OSDController extends Component {
             }
         }
         
-        if (this._isOsdVisible) {
+        if (this._isOsdVisible && !exitWhenOsdVisible) {
             this.hide();
         } else {
             this._executeAction('exit');
@@ -3213,7 +3243,7 @@ export default class OSDController extends Component {
             if (item.IndexNumber !== undefined) {
                 const s = item.ParentIndexNumber || 1;
                 const e = item.IndexNumber;
-                secondary += ` S${String(s).padStart(2,'0')}:E${String(e).padStart(2,'0')}`;
+                secondary += ` S${String(s).padStart(2,'0')}E${String(e).padStart(2,'0')}`;
             }
             if (item.Name) secondary += ` - ${item.Name}`;
             

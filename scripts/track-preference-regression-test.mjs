@@ -1,18 +1,60 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fingerprintStream, findMatchingStream } from '../src/utils/TrackFingerprint.js';
 import { resolveUserDataTrackIndex } from '../src/utils/TrackPreferenceResolver.js';
+import { shouldForceSubtitleOffForPlayback } from '../src/utils/SubtitleSelectionPolicy.js';
 
 const backingStore = new Map();
 globalThis.window = globalThis.window || {};
 globalThis.localStorage = {
-    get length() { return backingStore.size; },
-    key(index) { return Array.from(backingStore.keys())[index] ?? null; },
-    getItem(key) { return backingStore.has(key) ? backingStore.get(key) : null; },
-    setItem(key, value) { backingStore.set(key, String(value)); },
-    removeItem(key) { backingStore.delete(key); }
+    get length() {
+        return backingStore.size;
+    },
+    key(index) {
+        return Array.from(backingStore.keys())[index] ?? null;
+    },
+    getItem(key) {
+        return backingStore.has(key) ? backingStore.get(key) : null;
+    },
+    setItem(key, value) {
+        backingStore.set(key, String(value));
+    },
+    removeItem(key) {
+        backingStore.delete(key);
+    }
 };
+
+{
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: undefined }),
+        true,
+        'subtitleMode=None should force subtitles off when there is no explicit per-playback subtitle selection'
+    );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: 4 }),
+        false,
+        'subtitleMode=None should not override an explicit subtitle track selection from the current playback request'
+    );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({ subtitleMode: 'None', preSelectedSubtitle: -1 }),
+        false,
+        'explicit subtitle disable selection should remain explicit and skip restore fallbacks'
+    );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({
+            subtitleMode: 'None',
+            preSelectedSubtitle: undefined,
+            resolvedSubtitle: 4
+        }),
+        false,
+        'subtitleMode=None should not override a saved local subtitle choice restored for playback'
+    );
+}
 
 {
     const picked = {
@@ -91,11 +133,44 @@ globalThis.localStorage = {
 
     assert.equal(loaded.audio.language, 'eng', 'saved season audio fingerprint should load');
     assert.equal(loaded.audio.isDefault, false, 'saved season audio should preserve non-default flag');
-    assert.equal(loaded.subtitle.codec, 'subrip', 'saved season subtitle fingerprint should merge without erasing audio');
+    assert.equal(
+        loaded.subtitle.codec,
+        'subrip',
+        'saved season subtitle fingerprint should merge without erasing audio'
+    );
 }
 
 {
-    const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } = await import('../src/player/core/AudioTrackMapper.js');
+    const { PlayerSettings } = await import('../src/utils/PlayerSettings.js');
+    const { storage } = await import('../src/utils/StorageService.js');
+
+    assert.equal(PlayerSettings.get('enableDts'), 'auto', 'DTS passthrough should default to auto');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', false),
+        false,
+        'auto DTS setting should resolve to false when device capability is false'
+    );
+
+    storage.setItem('player:enableDts', 'enable');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', false),
+        true,
+        'explicit DTS enable should override missing device capability'
+    );
+
+    storage.setItem('player:enableDts', 'disable');
+    assert.equal(
+        PlayerSettings.resolveCompatibilitySetting('enableDts', true),
+        false,
+        'explicit DTS disable should override present device capability'
+    );
+
+    storage.removeItem('player:enableDts');
+}
+
+{
+    const { resolveAudioOutputIndex, resolveBackendAudioTrackListIndex } =
+        await import('../src/player/core/AudioTrackMapper.js');
     const mediaSource = {
         MediaStreams: [
             { Type: 'Video', Index: 0 },
@@ -228,11 +303,7 @@ globalThis.localStorage = {
         forceServerSelectedAudio: true
     });
 
-    assert.match(
-        streamInfo.url,
-        /Static=false/,
-        'forced DTS audio fallback must not use raw Static=true MKV'
-    );
+    assert.match(streamInfo.url, /Static=false/, 'forced DTS audio fallback must not use raw Static=true MKV');
 
     const streamInfoWithRewrittenDefault = MediaHelper.buildStreamUrl({
         serverUrl: 'https://jellyfin.example',
@@ -329,6 +400,37 @@ globalThis.localStorage = {
         animeAacStreamInfo.url,
         /Static=true/,
         'ordinary multi-audio AAC anime should keep raw Static=true DirectPlay'
+    );
+}
+
+{
+    const playerPageSource = readFileSync(new URL('../src/pages/PlayerPage.js', import.meta.url), 'utf8');
+    const playerSettingsSource = readFileSync(new URL('../src/utils/PlayerSettings.js', import.meta.url), 'utf8');
+
+    assert.match(
+        playerPageSource,
+        /const hasPreSelectedSubtitle =\s*preSelectedSubtitle !== null && preSelectedSubtitle !== undefined;/,
+        'PlayerPage should distinguish explicit subtitle picks from restored/default subtitle picks'
+    );
+    assert.match(
+        playerPageSource,
+        /_captureInitialExplicitTrackSelection\(\s*explicitInitialTrackSelection,/,
+        'explicit initial track picks should be captured immediately after playback starts'
+    );
+    assert.match(
+        playerPageSource,
+        /_captureSessionTrackSelection\(selection, mediaSource\);[\s\S]*_captureSeasonTrackPref\(selection\);/,
+        'explicit initial track picks should write through to session and season preference stores'
+    );
+    assert.match(
+        playerPageSource,
+        /_onMediaStreamsChange\(data\) \{[\s\S]*this\._captureSessionTrackSelection\(\s*data,[\s\S]*this\._captureSeasonTrackPref\(data\);/,
+        'runtime subtitle/audio changes should write through to session localStorage before progress throttling'
+    );
+    assert.match(
+        playerSettingsSource,
+        /persistTrackSelectionInSeason: true,/,
+        'season audio/subtitle persistence should default on so subtitle picks survive the next playback'
     );
 }
 

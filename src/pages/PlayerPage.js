@@ -35,6 +35,8 @@ import { platformInfo } from '../utils/PlatformInfo.js';
 import { webosAdapter } from '../webos/WebOSAdapter.js';
 import { syncPlayManager } from '../core/syncplay/SyncPlayManager.js';
 import { globalClock } from '../ui/GlobalClock.js';
+import { getChapterAwareSkipAction } from './playerRemoteNavigation.js';
+import { shouldForceSubtitleOffForPlayback } from '../utils/SubtitleSelectionPolicy.js';
 
 const log = logger.create('Player');
 
@@ -63,6 +65,7 @@ class PlayerPage extends Page {
 
         // Track reporting state
         this._hasReportedStart = false;
+        this._isPaused = false;
 
         // Cached media source for stop reporting
         // (player clears this internally after stop, so we need a copy)
@@ -89,6 +92,41 @@ class PlayerPage extends Page {
      */
     get osd() {
         return this._osd;
+    }
+
+    _handleHardwareSkip(direction) {
+        const action = getChapterAwareSkipAction({
+            direction,
+            item: this._item,
+            player: this._player
+        });
+
+        log.info(`Hardware Remote: ${direction === 'next' ? 'Next' : 'Previous'} -> ${action}`);
+
+        switch (action) {
+            case 'nextChapter':
+                this._player.nextChapter();
+                this._osd?.show();
+                this._osd?.resetAutoHide?.();
+                break;
+            case 'previousChapter':
+                this._player.previousChapter();
+                this._osd?.show();
+                this._osd?.resetAutoHide?.();
+                break;
+            case 'nextChannel':
+                this._handleChannelChange(1);
+                break;
+            case 'previousChannel':
+                this._handleChannelChange(-1);
+                break;
+            case 'nextTrack':
+                this._playNextItem();
+                break;
+            case 'previousTrack':
+                this._playPreviousItem();
+                break;
+        }
     }
 
     render() {
@@ -146,6 +184,7 @@ class PlayerPage extends Page {
         this._item = null;
         this._resumePosition = 0;
         this._hasReportedStart = false;
+        this._isPaused = false;
         this._cachedPlayMethod = null;
 
         // Hide global clock during player loading/playback
@@ -465,6 +504,9 @@ class PlayerPage extends Page {
             };
             eventBus.on('remote:previous', this._onRemotePrevious);
 
+            this._onHardwareNext = () => this._handleHardwareSkip('next');
+            this._onHardwarePrevious = () => this._handleHardwareSkip('previous');
+
             // Repeat and Shuffle
             this._onRemoteRepeatMode = (mode) => {
                 log.info('Remote: SetRepeatMode', mode);
@@ -556,13 +598,6 @@ class PlayerPage extends Page {
             };
             eventBus.on('remote:userdatachanged', this._onRemoteUserDataChanged);
 
-            // Channel Up/Down for Live TV
-            this._onChannelUp = () => this._handleChannelChange(1);
-            eventBus.on('key:channelUp', this._onChannelUp);
-
-            this._onChannelDown = () => this._handleChannelChange(-1);
-            eventBus.on('key:channelDown', this._onChannelDown);
-
             // ================================================================
             // MAGIC CURSOR SUPPORT (WebOS / Tizen Pointer)
             // ================================================================
@@ -634,34 +669,10 @@ class PlayerPage extends Page {
             this.on('key:pause', () => this._onRemotePause());
             this.on('key:playPause', () => this._onRemotePlayPause());
             this.on('key:stop', () => this._onRemoteStop());
-            this.on('key:next', () => this._onRemoteNext());
-            this.on('key:previous', () => this._onRemotePrevious());
-            this.on('key:channelUp', () => {
-                // Optional LG channel-rocker override: jump chapters during VOD playback.
-                // Keep upstream Live TV channel switching as the fallback.
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.nextChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Up -> next chapter (user preference)');
-                    this._player.nextChapter();
-                    return;
-                }
-                this._onRemoteChannelUp();
-            });
-            this.on('key:channelDown', () => {
-                if (PlayerSettings.get('channelRockerJumpsChapters')
-                    && this._player
-                    && typeof this._player.previousChapter === 'function'
-                    && (this._player.getChapters?.().length || 0) > 0
-                    && this._item?.Type !== 'TvChannel') {
-                    log.debug('Channel Down -> previous chapter (user preference)');
-                    this._player.previousChapter();
-                    return;
-                }
-                this._onRemoteChannelDown();
-            });
+            this.on('key:next', () => this._onHardwareNext());
+            this.on('key:previous', () => this._onHardwarePrevious());
+            this.on('key:channelUp', () => this._onRemoteChannelUp());
+            this.on('key:channelDown', () => this._onRemoteChannelDown());
 
             this.on('key:rewind', () => {
                 if (this._player) {
@@ -869,6 +880,8 @@ class PlayerPage extends Page {
         const preSelectedMediaSourceId = state.get('player:initialMediaSourceId');
         const preSelectedAudio = state.get('player:initialAudioIndex');
         const preSelectedSubtitle = state.get('player:initialSubtitleIndex');
+        const hasPreSelectedAudio = preSelectedAudio !== null && preSelectedAudio !== undefined;
+        const hasPreSelectedSubtitle = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined;
 
         // Clear state to prevent persistence to future playbacks
         state.set('player:initialMediaSourceId', null);
@@ -886,18 +899,15 @@ class PlayerPage extends Page {
         // If that is missing/stale, prefer the fork's season-scoped fingerprint,
         // then upstream's session-wide language memory, and finally defaults.
         const seasonPref = this._resolveSeasonTrackPref(item, mediaSource);
-        const userDataAudioIndex = resolveUserDataTrackIndex(
-            mediaSource,
-            'Audio',
-            item.UserData?.AudioStreamIndex
-        );
+        const userDataAudioIndex = resolveUserDataTrackIndex(mediaSource, 'Audio', item.UserData?.AudioStreamIndex);
         const userDataSubtitleIndex = resolveUserDataTrackIndex(
             mediaSource,
             'Subtitle',
             item.UserData?.SubtitleStreamIndex
         );
-        let savedAudioIndex = preSelectedAudio !== null && preSelectedAudio !== undefined ? preSelectedAudio : undefined;
-        let savedSubtitleIndex = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined ? preSelectedSubtitle : undefined;
+        const subtitleMode = PlayerSettings.get('subtitleMode') || 'Default';
+        let savedAudioIndex = hasPreSelectedAudio ? preSelectedAudio : undefined;
+        let savedSubtitleIndex = hasPreSelectedSubtitle ? preSelectedSubtitle : undefined;
 
         if (savedAudioIndex === undefined && userDataAudioIndex !== undefined) {
             savedAudioIndex = userDataAudioIndex;
@@ -956,10 +966,17 @@ class PlayerPage extends Page {
         }
 
         // 3. Fallback to defaults from MediaSource.
+        const forceSubtitleOff = shouldForceSubtitleOffForPlayback({
+            subtitleMode,
+            preSelectedSubtitle,
+            resolvedSubtitle: savedSubtitleIndex
+        });
         if (savedAudioIndex === undefined) {
             savedAudioIndex = mediaSource?.DefaultAudioStreamIndex;
         }
-        if (savedSubtitleIndex === undefined) {
+        if (forceSubtitleOff) {
+            savedSubtitleIndex = -1;
+        } else if (savedSubtitleIndex === undefined) {
             savedSubtitleIndex = mediaSource?.DefaultSubtitleStreamIndex;
         }
 
@@ -970,47 +987,55 @@ class PlayerPage extends Page {
             preSelectedSubtitle,
             userDataAudioIndex,
             userDataSubtitleIndex,
+            subtitleMode,
             seasonPrefApplied: seasonPref.applied
         });
 
+        const explicitInitialTrackSelection = {};
+        if (hasPreSelectedAudio && typeof savedAudioIndex === 'number') {
+            explicitInitialTrackSelection.audioStreamIndex = savedAudioIndex;
+        }
+        if (hasPreSelectedSubtitle && typeof savedSubtitleIndex === 'number') {
+            explicitInitialTrackSelection.subtitleStreamIndex = savedSubtitleIndex;
+        }
+
         // Start playback using the player's internal logic
         // This handles PlaybackInfo fetching, media source selection, and stream URL building
+        const playOptions = {
+            item: item, // Pass full item which might have Chapters
+            itemId: item.Id,
+            userId: api.userId, // Required for playback info
+            startPositionTicks: this._resumePosition,
+            mediaSourceId: mediaSource?.Id,
+            audioStreamIndex: savedAudioIndex,
+            subtitleStreamIndex: savedSubtitleIndex,
+            autoPlay: syncPlayManager.wantsAutoPlay()
+        };
+
+        if (this._forceTranscode) {
+            playOptions.playbackMode = 'transcode';
+            this._forceTranscode = false; // Reset after applying
+        }
+
         try {
-            const playOptions = {
-                item: item, // Pass full item which might have Chapters
-                itemId: item.Id,
-                userId: api.userId, // Required for playback info
-                startPositionTicks: this._resumePosition,
-                mediaSourceId: mediaSource?.Id,
-                audioStreamIndex: savedAudioIndex,
-                subtitleStreamIndex: savedSubtitleIndex,
-                autoPlay: syncPlayManager.wantsAutoPlay()
-            };
-
-            if (this._forceTranscode) {
-                playOptions.playbackMode = 'transcode';
-                this._forceTranscode = false; // Reset after applying
-            }
-
             await this._player.play(playOptions);
         } catch (err) {
             if (err.name === 'NotAllowedError') {
                 log.warn('_startPlayback: Autoplay blocked. Forcing mute and retrying.');
                 this._player.setMuted(true);
                 await this._player.play({
-                    item: item,
-                    itemId: item.Id,
-                    userId: api.userId,
-                    startPositionTicks: this._resumePosition,
-                    mediaSourceId: mediaSource?.Id,
-                    audioStreamIndex: savedAudioIndex,
-                    subtitleStreamIndex: savedSubtitleIndex,
+                    ...playOptions,
                     autoPlay: syncPlayManager.wantsAutoPlay()
                 });
             } else {
                 throw err;
             }
         }
+
+        this._captureInitialExplicitTrackSelection(
+            explicitInitialTrackSelection,
+            this._player?.getCurrentMediaSource?.() || mediaSource
+        );
 
         // ====================================================================
         // WebOS Media Session (System Controls & Metadata)
@@ -1029,8 +1054,8 @@ class PlayerPage extends Page {
                     onPlay: () => this._onRemotePlay(),
                     onPause: () => this._onRemotePause(),
                     onStop: () => this._onRemoteStop(),
-                    onNext: () => this._onRemoteNext(),
-                    onPrevious: () => this._onRemotePrevious(),
+                    onNext: () => this._onHardwareNext(),
+                    onPrevious: () => this._onHardwarePrevious(),
                     onSeekForward: () => {
                         if (this._player) this._player.seekRelative(30000);
                     },
@@ -1237,9 +1262,9 @@ class PlayerPage extends Page {
             // ================================================================
             // TRANSITION GUARD FOR EXIT SIGNALS
             // ================================================================
-            // In webOS and other smart TV browsers, DOM manipulation (such as 
-            // cycling the video container to clear hardware buffers) triggers 
-            // focus loss which can synthesize back / exit signals. 
+            // In webOS and other smart TV browsers, DOM manipulation (such as
+            // cycling the video container to clear hardware buffers) triggers
+            // focus loss which can synthesize back / exit signals.
             //
             // If the player is currently in the process of switching tracks,
             // ignore this command entirely to prevent unexpected shutdowns.
@@ -1308,6 +1333,7 @@ class PlayerPage extends Page {
         if (!this._hasReportedStart) {
             this._reportPlaybackStart();
             this._hasReportedStart = true;
+            this._isPaused = false;
 
             /*
              * Thread the resolved media source ID to the OSD so TrickplayManager
@@ -1323,7 +1349,9 @@ class PlayerPage extends Page {
             }
         } else {
             // Send 'unpause' event when resuming from pause
-            this._reportPlaybackProgress('unpause');
+            if (this._isPaused) {
+                this._reportPlaybackProgress('unpause');
+            }
         }
     }
 
@@ -1331,6 +1359,7 @@ class PlayerPage extends Page {
         log.info('Paused');
         eventBus.emit('player:paused', { item: this._item });
 
+        this._isPaused = true;
         // Report paused state with explicit 'pause' event
         this._reportPlaybackProgress('pause');
     }
@@ -1707,14 +1736,35 @@ class PlayerPage extends Page {
      * carried forward to the next episode if 'rememberTracksForSession' is on.
      */
     _captureActiveTrackSelection() {
-        if (PlayerSettings.get('rememberTracksForSession') === false) return;
         if (!this._player || !this._item) return;
 
         const mediaSource = this._player.getCurrentMediaSource?.() || this._item.MediaSources?.[0];
+        this._captureSessionTrackSelection(
+            {
+                audioStreamIndex: this._player._currentAudioStreamIndex,
+                subtitleStreamIndex: this._player._currentSubtitleStreamIndex
+            },
+            mediaSource
+        );
+    }
+
+    _captureInitialExplicitTrackSelection(selection, mediaSource) {
+        if (!selection || Object.keys(selection).length === 0) return;
+
+        log.info('[Track Memory] Capturing explicit initial track selection:', selection);
+        this._captureSessionTrackSelection(selection, mediaSource);
+        this._captureSeasonTrackPref(selection);
+    }
+
+    _captureSessionTrackSelection(data, mediaSource = null) {
+        if (PlayerSettings.get('rememberTracksForSession') === false) return;
+        if (!this._item) return;
+
+        mediaSource = mediaSource || this._player?.getCurrentMediaSource?.() || this._item.MediaSources?.[0];
         if (!mediaSource || !mediaSource.MediaStreams) return;
 
         // 1. Audio Track Capture
-        const activeAudioIndex = this._player._currentAudioStreamIndex;
+        const activeAudioIndex = data?.audioStreamIndex;
         if (activeAudioIndex !== undefined && activeAudioIndex !== -1) {
             const activeAudioTrack = mediaSource.MediaStreams.find(
                 (s) => s.Type === 'Audio' && s.Index === activeAudioIndex
@@ -1730,7 +1780,7 @@ class PlayerPage extends Page {
         }
 
         // 2. Subtitle Track Capture
-        const activeSubtitleIndex = this._player._currentSubtitleStreamIndex;
+        const activeSubtitleIndex = data?.subtitleStreamIndex;
         if (activeSubtitleIndex !== undefined) {
             if (activeSubtitleIndex === -1) {
                 // User explicitly disabled subtitles
@@ -1949,7 +1999,7 @@ class PlayerPage extends Page {
                ------------------------------------------------------------- */
             const isHdr = this._player?.isCurrentMediaHDR?.() || false;
             const styles = SubtitleStyles.getTextStyles(isHdr);
-            
+
             // Apply to the span
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
@@ -2016,7 +2066,7 @@ class PlayerPage extends Page {
                ------------------------------------------------------------- */
             const isHdr = this._player?.isCurrentMediaHDR?.() || false;
             const styles = SubtitleStyles.getSecondaryTextStyles(isHdr);
-            
+
             const span = overlay.querySelector('.subtitle-line');
             if (span) {
                 SubtitleStyles.applyStyles(span, styles);
@@ -2067,6 +2117,10 @@ class PlayerPage extends Page {
         // below is intentionally throttled during startup, but track memory
         // must not be throttled: users often switch audio/subtitles in the
         // first seconds of playback and expect the choice to stick.
+        this._captureSessionTrackSelection(
+            data,
+            this._player?.getCurrentMediaSource?.() || this._player?._currentMediaSource || this._item.MediaSources?.[0]
+        );
         this._captureSeasonTrackPref(data);
 
         // Skip reporting during initial setup (first 2 seconds of play time) to avoid CPU contention.
@@ -2100,16 +2154,19 @@ class PlayerPage extends Page {
         if (!this._item || this._item.Type !== 'Episode') return;
         if (!this._item.SeriesId || !this._item.SeasonId) return;
 
-        const mediaSource = this._player?.getCurrentMediaSource?.()
-            || this._player?._currentMediaSource
-            || this._item.MediaSources?.[0];
+        const mediaSource =
+            this._player?.getCurrentMediaSource?.() ||
+            this._player?._currentMediaSource ||
+            this._item.MediaSources?.[0];
         const streams = mediaSource?.MediaStreams || [];
         if (streams.length === 0) return;
 
         // Start fresh if we switched series or season since last capture.
-        if (!this._seasonTrackPref
-            || this._seasonTrackPref.seriesId !== this._item.SeriesId
-            || this._seasonTrackPref.seasonId !== this._item.SeasonId) {
+        if (
+            !this._seasonTrackPref ||
+            this._seasonTrackPref.seriesId !== this._item.SeriesId ||
+            this._seasonTrackPref.seasonId !== this._item.SeasonId
+        ) {
             this._seasonTrackPref = {
                 seriesId: this._item.SeriesId,
                 seasonId: this._item.SeasonId,
@@ -2148,12 +2205,10 @@ class PlayerPage extends Page {
         // Write-through to localStorage so the choice survives app exit.
         // Keyed by serverUrl+userId+seasonId; LRU-capped at 50 seasons.
         if (audioDelta !== undefined || subtitleDelta !== undefined) {
-            saveSeasonPref(
-                api.serverUrl,
-                api.userId,
-                this._item.SeasonId,
-                { audio: audioDelta, subtitle: subtitleDelta }
-            );
+            saveSeasonPref(api.serverUrl, api.userId, this._item.SeasonId, {
+                audio: audioDelta,
+                subtitle: subtitleDelta
+            });
         }
     }
 
@@ -2177,9 +2232,11 @@ class PlayerPage extends Page {
         // Prefer the hot in-memory snapshot when it matches the current season.
         // Cold starts (fresh app launch, resumed series) fall through to disk.
         let pref = null;
-        if (this._seasonTrackPref
-            && this._seasonTrackPref.seriesId === item.SeriesId
-            && this._seasonTrackPref.seasonId === item.SeasonId) {
+        if (
+            this._seasonTrackPref &&
+            this._seasonTrackPref.seriesId === item.SeriesId &&
+            this._seasonTrackPref.seasonId === item.SeasonId
+        ) {
             pref = {
                 audio: this._seasonTrackPref.audio,
                 subtitle: this._seasonTrackPref.subtitle
@@ -2209,7 +2266,9 @@ class PlayerPage extends Page {
             if (match) {
                 out.audio = match.Index;
                 out.applied = true;
-                log.info(`Season track pref: matched audio → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+                log.info(
+                    `Season track pref: matched audio → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`
+                );
             }
         }
 
@@ -2222,7 +2281,9 @@ class PlayerPage extends Page {
             if (match) {
                 out.subtitle = match.Index;
                 out.applied = true;
-                log.info(`Season track pref: matched subtitle → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`);
+                log.info(
+                    `Season track pref: matched subtitle → Index ${match.Index} (${match.DisplayTitle || match.Title || match.Language})`
+                );
             }
         }
 
@@ -2301,6 +2362,12 @@ class PlayerPage extends Page {
         // Never report progress for intros
         if (this._item.isIntro) {
             return;
+        }
+
+        if (eventName === 'pause') {
+            this._isPaused = true;
+        } else if (eventName === 'unpause') {
+            this._isPaused = false;
         }
 
         try {
@@ -2665,9 +2732,9 @@ class PlayerPage extends Page {
         // ====================================================================
         // PHYSICAL / PLATFORM BACK BUTTON TRANSITION GUARD
         // ====================================================================
-        // Discard any back button presses or synthetic back key events from 
-        // the host environment while transitioning tracks. This ensures that 
-        // focus jumps or physical remote hits during the brief settle window 
+        // Discard any back button presses or synthetic back key events from
+        // the host environment while transitioning tracks. This ensures that
+        // focus jumps or physical remote hits during the brief settle window
         // do not cancel the upcoming playback session.
         // ====================================================================
         if (this._isSwitching) {
@@ -2675,15 +2742,16 @@ class PlayerPage extends Page {
             return true;
         }
 
-        // Delegate to OSD — it handles menu close → OSD hide → exit chain
-        if (this._osd?.handleBack?.()) {
-            log.info('OSD handled back event');
+        // Physical platform Back closes an open OSD menu first; otherwise it exits
+        // the player via the remoteBack route instead of the generic OSD exit action.
+        if (this._osd?.hasBackMenu?.()) {
+            this._osd.handleBack();
+            log.info('OSD menu handled back event');
             return true;
         }
 
-        log.info('OSD did not handle back, calling _stopAndExit()');
-        // OSD is hidden and no menu is open — stop playback and go back
-        this._stopAndExit();
+        log.info('No OSD menu open, calling _stopAndExit(remoteBack)');
+        this._stopAndExit(true, 'remoteBack');
         return true;
     }
 
@@ -2746,6 +2814,20 @@ class PlayerPage extends Page {
         // but kept for potential future use (e.g., analytics, remote control).
         eventBus.emit('player:stopped', { itemId: this._item?.Id, reason });
 
+        // If we came from a slideshow, App.js pushed the player instead of
+        // replacing the current route, so Back should return to the slideshow
+        // exactly where it left off. This takes precedence over the normal
+        // physical Back reset-to-home behavior.
+        if (this.params.fromSlideshow === 'true') {
+            router.back();
+            return;
+        }
+
+        if (clearChain && reason === 'remoteBack') {
+            router.reset('/home');
+            return;
+        }
+
         // ----------------------------------------------------------------
         // Navigation Override: Ensure we return to the Details page of the
         // item that was LAST playing, not the one that started the session.
@@ -2764,15 +2846,9 @@ class PlayerPage extends Page {
         ) {
             const detailsPath = `/details/${this._item.Id}`;
 
-            // The PlayerPage always replaces the page that launched it in history (to prevent bloat).
-            // HOWEVER: if we came from a slideshow, we want to go BACK to the slideshow exactly
-            // where we left off. In that case, App.js pushed the player instead of replacing,
-            // so we just call router.back().
-            if (this.params.fromSlideshow === 'true') {
-                router.back();
-            } else {
-                router.navigate(detailsPath, { replace: true, isBack: true });
-            }
+            // The PlayerPage normally replaces the page that launched it in history
+            // to prevent route bloat, so return to the last played item's details page.
+            router.navigate(detailsPath, { replace: true, isBack: true });
         } else {
             // Standard back navigation for special types (Live TV, Intros) or if no item state exists.
             router.back();
@@ -2826,9 +2902,6 @@ class PlayerPage extends Page {
         if (this._onRemoteSubtitle) eventBus.off('remote:subtitle', this._onRemoteSubtitle);
         if (this._onRemoteQueueUpdate) eventBus.off('remote:queueupdate', this._onRemoteQueueUpdate);
         if (this._onRemoteUserDataChanged) eventBus.off('remote:userdatachanged', this._onRemoteUserDataChanged);
-        if (this._onChannelUp) eventBus.off('key:channelUp', this._onChannelUp);
-        if (this._onChannelDown) eventBus.off('key:channelDown', this._onChannelDown);
-
         // Clean up focus sections
         focusManager.unregister('player-error');
 
@@ -2892,7 +2965,7 @@ class PlayerPage extends Page {
                 // Enrich program with channel info for better OSD display
                 program.ChannelName = this._item.Name;
                 program.ChannelNumber = this._item.Number || this._item.ChannelNumber;
-                
+
                 // Cache for OSD init sync and playback start sync
                 this._currentLiveTvProgram = program;
 
@@ -2912,11 +2985,53 @@ class PlayerPage extends Page {
      */
     _onRemoteChannelUp() {
         log.info('Remote: Channel Up');
+        if (PlayerSettings.get('channelRockerJumpsChapters')) {
+            const action = getChapterAwareSkipAction({
+                direction: 'next',
+                item: this._item,
+                player: this._player
+            });
+
+            if (action === 'nextChapter') {
+                this._handleHardwareSkip('next');
+                return;
+            }
+
+            if (action !== 'nextChannel') {
+                log.debug(`Channel Up ignored for non-channel playback (${action})`);
+                return;
+            }
+        } else if (this._item?.Type !== 'TvChannel') {
+            log.debug('Channel Up ignored for non-channel playback (chapter rocker disabled)');
+            return;
+        }
+
         this._handleChannelChange(1);
     }
 
     _onRemoteChannelDown() {
         log.info('Remote: Channel Down');
+        if (PlayerSettings.get('channelRockerJumpsChapters')) {
+            const action = getChapterAwareSkipAction({
+                direction: 'previous',
+                item: this._item,
+                player: this._player
+            });
+
+            if (action === 'previousChapter') {
+                this._handleHardwareSkip('previous');
+                return;
+            }
+
+            if (action !== 'previousChannel') {
+                log.debug(`Channel Down ignored for non-channel playback (${action})`);
+                return;
+            }
+        } else if (this._item?.Type !== 'TvChannel') {
+            log.debug('Channel Down ignored for non-channel playback (chapter rocker disabled)');
+            return;
+        }
+
         this._handleChannelChange(-1);
     }
 
@@ -2947,7 +3062,9 @@ class PlayerPage extends Page {
             // 2. Find current channel index
             const currentIndex = this._channels.findIndex((c) => c.Id === this._item.Id);
             if (currentIndex === -1) {
-                log.warn(`Current channel (${this._item.Name}, ${this._item.Id}) not found in navigation list. Falling back to first channel.`);
+                log.warn(
+                    `Current channel (${this._item.Name}, ${this._item.Id}) not found in navigation list. Falling back to first channel.`
+                );
                 const firstChannel = this._channels[0];
                 if (firstChannel.Id === this._item.Id) {
                     log.info('Fallback channel is already playing - ignoring switch.');
@@ -2989,7 +3106,9 @@ class PlayerPage extends Page {
             return;
         }
 
-        log.info(`[ChannelSwitch] Transitioning from ${this._item.Name} (${this._item.Id}) to ${nextChannel.Name} (${nextChannel.Id})`);
+        log.info(
+            `[ChannelSwitch] Transitioning from ${this._item.Name} (${this._item.Id}) to ${nextChannel.Name} (${nextChannel.Id})`
+        );
 
         // Stop current playback cleanly
         if (this._player?.stop) {
@@ -3005,7 +3124,6 @@ class PlayerPage extends Page {
         await new Promise((r) => setTimeout(r, 400));
 
         // Update state for new channel
-        const oldItem = this._item;
         this._item = nextChannel;
         this.title = nextChannel.Name;
         this._resumePosition = 0;

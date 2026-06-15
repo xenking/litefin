@@ -253,6 +253,14 @@ class TizenAdapter {
                     e.preventDefault();
                     eventBus.emit('key:fastForward', e);
                     break;
+                case TIZEN_KEYS.NEXT:
+                    e.preventDefault();
+                    eventBus.emit('key:next', e);
+                    break;
+                case TIZEN_KEYS.PREVIOUS:
+                    e.preventDefault();
+                    eventBus.emit('key:previous', e);
+                    break;
 
                 // Color buttons
                 case TIZEN_KEYS.RED:
@@ -471,8 +479,8 @@ class TizenAdapter {
      * Launch the native YouTube application on Samsung Tizen TVs and navigate
      * directly to the specified video.
      *
-     * Tries known YouTube App IDs first. If the launch fails (app not installed, 
-     * or running in browser dev mode), falls back to opening the standard 
+     * Tries known YouTube App IDs first. If the launch fails (app not installed,
+     * or running in browser dev mode), falls back to opening the standard
      * YouTube URL in a browser tab.
      *
      * @param {string} videoId - The YouTube video ID (e.g. "dQw4w9WgXcQ")
@@ -499,14 +507,13 @@ class TizenAdapter {
             null, // mime
             null, // category
             [
-                new tizen.ApplicationControlData(
-                    'http://tizen.org/appcontrol/data/url',
-                    [`https://www.youtube.com/watch?v=${videoId}`]
-                )
+                new tizen.ApplicationControlData('http://tizen.org/appcontrol/data/url', [
+                    `https://www.youtube.com/watch?v=${videoId}`
+                ])
             ]
         );
 
-        // Sequence of app IDs to try. 
+        // Sequence of app IDs to try.
         // 111299001912 is standard Smart TV YouTube.
         // 9Ur5IzDKqV.TizenYouTube is an alternate reported on some sets.
         const appIds = ['111299001912', '9Ur5IzDKqV.TizenYouTube'];

@@ -9,6 +9,19 @@ import { logger } from './Logger.js';
 import { PlayerSettings } from './PlayerSettings.js';
 
 const log = logger.create('i18n');
+const SUPPORTED_UI_LANGUAGES = ['en-us', 'ru'];
+
+export function normalizeUiLanguage(langCode) {
+    const normalized = String(langCode || '')
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, '-');
+
+    if (normalized === 'ru' || normalized.startsWith('ru-')) return 'ru';
+    if (normalized === 'en' || normalized.startsWith('en-')) return 'en-us';
+
+    return 'en-us';
+}
 
 class I18nManager {
     constructor() {
@@ -84,8 +97,9 @@ class I18nManager {
          * with pathname produces: "null/path/to/index.html" — a completely
          * invalid URL that XHR silently fails to load.
          *
-         * The safe universal approach is to use window.location.href directly:
-         *   file:///media/.../index.html  → strip everything after last /
+         * The safe universal approach strips hash-router fragments before
+         * deriving the asset directory:
+         *   file:///media/.../index.html#/home → file:///media/.../locales/
          *   http://192.168.1.1:8081/#/route → strip fragment first via origin+pathname
          *
          * For HTTP (dev server with hash router), href looks like:
@@ -98,8 +112,9 @@ class I18nManager {
         const protocol = window.location.protocol;
 
         if (protocol === 'file:') {
-            // file:// packaged app — origin is null/useless, extract base from raw href
-            base = href.substring(0, href.lastIndexOf('/') + 1);
+            // file:// packaged app — origin is null/useless, so strip the hash from href first
+            const pageUrl = href.split('#')[0];
+            base = pageUrl.substring(0, pageUrl.lastIndexOf('/') + 1);
         } else {
             // http:// or https:// — use origin+pathname to avoid hash-router fragments
             const pageUrl = window.location.origin + window.location.pathname;
@@ -111,11 +126,15 @@ class I18nManager {
 
     /**
      * Initializes the language manager.
-     * @param {string} langCode - Language ('en-us', 'es', etc.)
+     * @param {string} langCode - Language ('en-us', 'ru')
      */
-    async init(langCode = 'en') {
-        this.currentLang = langCode;
-        this.isRTL = langCode === 'ar' || langCode === 'he' || langCode === 'fa';
+    async init(langCode = 'en-us') {
+        this.currentLang = normalizeUiLanguage(langCode);
+        this.isRTL = false;
+
+        if (!SUPPORTED_UI_LANGUAGES.includes(this.currentLang)) {
+            this.currentLang = this.fallbackLang;
+        }
 
         const url = this._localeUrl(this.currentLang);
         log.info(`[i18n] Initializing with lang: ${this.currentLang}`);
@@ -131,7 +150,9 @@ class I18nManager {
 
             // Sanity check — empty dict means url was wrong; this would cause all keys to show raw
             if (keyCount === 0) {
-                log.warn(`[i18n] WARNING: Loaded 0 keys! The locale file at "${url}" may be empty or the URL is wrong.`);
+                log.warn(
+                    `[i18n] WARNING: Loaded 0 keys! The locale file at "${url}" may be empty or the URL is wrong.`
+                );
             }
         } catch (error) {
             log.error(`[i18n] Init failed, falling back to empty dict`, {
