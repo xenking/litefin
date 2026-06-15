@@ -16,6 +16,17 @@ const makeChapteredPlayer = (currentPositionTicks) => ({
 
 const firstChapterPlayer = makeChapteredPlayer(300000000);
 const lastChapterPlayer = makeChapteredPlayer(700000000);
+const tizenEffectiveLastChapterPlayer = {
+    getChapters: () => [{ StartPositionTicks: 0 }, { StartPositionTicks: 600000000 }],
+    getCurrentPositionTicks: () => 575000000,
+    getCurrentChapterIndex(timeTicks) {
+        const currentTicks = timeTicks ?? this.getCurrentPositionTicks();
+        return currentTicks >= 600000000 ? 1 : 0;
+    },
+    backendType: 'tizen',
+    nextChapter() {},
+    previousChapter() {}
+};
 
 assert.equal(
     getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: firstChapterPlayer }),
@@ -27,6 +38,12 @@ assert.equal(
     getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: lastChapterPlayer }),
     'nextTrack',
     'next skip should fall back to the queue at the final chapter'
+);
+
+assert.equal(
+    getChapterAwareSkipAction({ direction: 'next', item: videoItem, player: tizenEffectiveLastChapterPlayer }),
+    'nextTrack',
+    'Tizen next skip should use the effective 3s lookahead before falling back from final chapter to queue'
 );
 
 assert.equal(
@@ -129,6 +146,11 @@ assert.match(
     playerPageSource,
     /router\.reset\('\/home'\)/,
     'user-stop Back flow must reset navigation to the home screen'
+);
+assert.match(
+    playerPageSource,
+    /if \(this\.params\.fromSlideshow === 'true'\) \{[\s\S]*router\.back\(\);[\s\S]*return;[\s\S]*if \(clearChain && reason === 'remoteBack'\) \{/,
+    'slideshow playback should return to slideshow before physical Back resets normal playback to home'
 );
 
 const osdControllerSource = readFileSync(new URL('../src/player/osd/OSDController.js', import.meta.url), 'utf8');

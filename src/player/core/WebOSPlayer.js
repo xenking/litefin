@@ -227,6 +227,7 @@ export class WebOSPlayer {
     async play(options) {
         log.info('WebOSPlayer: Starting playback', options.url);
 
+        this._lastRecoveryKickTime = 0;
         this._currentPlayOptions = options;
         this._started    = false;
         this._timeUpdated = false;
@@ -740,6 +741,7 @@ export class WebOSPlayer {
         this._cancelRobustResume = true;
         this._robustSeekTarget   = null;
         this._robustSeekPending  = false;
+        this._lastRecoveryKickTime = 0;
         this._clearStallCheck();
         this._destroyHlsPlayer();
 

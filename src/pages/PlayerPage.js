@@ -2809,6 +2809,15 @@ class PlayerPage extends Page {
         // but kept for potential future use (e.g., analytics, remote control).
         eventBus.emit('player:stopped', { itemId: this._item?.Id, reason });
 
+        // If we came from a slideshow, App.js pushed the player instead of
+        // replacing the current route, so Back should return to the slideshow
+        // exactly where it left off. This takes precedence over the normal
+        // physical Back reset-to-home behavior.
+        if (this.params.fromSlideshow === 'true') {
+            router.back();
+            return;
+        }
+
         if (clearChain && reason === 'remoteBack') {
             router.reset('/home');
             return;
@@ -2832,15 +2841,9 @@ class PlayerPage extends Page {
         ) {
             const detailsPath = `/details/${this._item.Id}`;
 
-            // The PlayerPage always replaces the page that launched it in history (to prevent bloat).
-            // HOWEVER: if we came from a slideshow, we want to go BACK to the slideshow exactly
-            // where we left off. In that case, App.js pushed the player instead of replacing,
-            // so we just call router.back().
-            if (this.params.fromSlideshow === 'true') {
-                router.back();
-            } else {
-                router.navigate(detailsPath, { replace: true, isBack: true });
-            }
+            // The PlayerPage normally replaces the page that launched it in history
+            // to prevent route bloat, so return to the last played item's details page.
+            router.navigate(detailsPath, { replace: true, isBack: true });
         } else {
             // Standard back navigation for special types (Live TV, Intros) or if no item state exists.
             router.back();

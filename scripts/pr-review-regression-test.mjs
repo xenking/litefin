@@ -129,6 +129,11 @@ assert.doesNotMatch(
 );
 assert.match(
     playerPage,
+    /if \(this\.params\.fromSlideshow === 'true'\) \{[\s\S]*router\.back\(\);[\s\S]*return;[\s\S]*if \(clearChain && reason === 'remoteBack'\) \{/,
+    'PlayerPage remoteBack should preserve slideshow return before resetting normal playback to home'
+);
+assert.match(
+    playerPage,
     /_onRemoteChannelUp\(\) \{[\s\S]*if \(PlayerSettings\.get\('channelRockerJumpsChapters'\)\) \{/,
     'PlayerPage ChannelUp should gate chapter jumps on channelRockerJumpsChapters'
 );
@@ -148,6 +153,16 @@ assert.match(
     webosPlayer,
     /if \(inCooldown\) \{[\s\S]*this\._stallTimer = setTimeout\([\s\S]*kickStuckDecoder\('still stalled after recovery cooldown'\);[\s\S]*retryDelay\);[\s\S]*return;/,
     'WebOSPlayer stall cooldown should retry recovery if the decoder remains frozen'
+);
+assert.match(
+    webosPlayer,
+    /async play\(options\) \{[\s\S]*this\._lastRecoveryKickTime = 0;[\s\S]*this\._currentPlayOptions = options;/,
+    'WebOSPlayer should reset stale stall recovery cooldown when a new playback starts'
+);
+assert.match(
+    webosPlayer,
+    /async stop\(\) \{[\s\S]*this\._lastRecoveryKickTime = 0;[\s\S]*this\._clearStallCheck\(\);/,
+    'WebOSPlayer should reset stall recovery cooldown when the current playback stops'
 );
 
 const baseCss = read('src/styles/base.css');

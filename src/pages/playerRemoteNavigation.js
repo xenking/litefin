@@ -13,18 +13,9 @@ const CHANNEL_ACTIONS = {
     previous: 'previousChannel'
 };
 
-function getCurrentChapterIndex(chapters, player) {
-    if (!Array.isArray(chapters) || chapters.length === 0) {
-        return -1;
-    }
+const TIZEN_CHAPTER_LOOKAHEAD_TICKS = 30000000;
 
-    if (typeof player?.getCurrentChapterIndex === 'function') {
-        const index = Number(player.getCurrentChapterIndex());
-        if (Number.isInteger(index)) {
-            return index;
-        }
-    }
-
+function getEffectiveChapterPositionTicks(player) {
     if (typeof player?.getCurrentPositionTicks !== 'function') {
         return null;
     }
@@ -34,9 +25,30 @@ function getCurrentChapterIndex(chapters, player) {
         return null;
     }
 
+    return player?.backendType === 'tizen' ? currentTicks + TIZEN_CHAPTER_LOOKAHEAD_TICKS : currentTicks;
+}
+
+function getCurrentChapterIndex(chapters, player) {
+    if (!Array.isArray(chapters) || chapters.length === 0) {
+        return -1;
+    }
+
+    const effectiveTicks = getEffectiveChapterPositionTicks(player);
+
+    if (typeof player?.getCurrentChapterIndex === 'function') {
+        const index = Number(player.getCurrentChapterIndex(effectiveTicks ?? undefined));
+        if (Number.isInteger(index)) {
+            return index;
+        }
+    }
+
+    if (effectiveTicks === null) {
+        return null;
+    }
+
     for (let index = chapters.length - 1; index >= 0; index--) {
         const startTicks = Number(chapters[index]?.StartPositionTicks || 0);
-        if (currentTicks >= startTicks) {
+        if (effectiveTicks >= startTicks) {
             return index;
         }
     }
