@@ -906,24 +906,20 @@ class PlayerPage extends Page {
             item.UserData?.SubtitleStreamIndex
         );
         const subtitleMode = PlayerSettings.get('subtitleMode') || 'Default';
-        const forceSubtitleOff = shouldForceSubtitleOffForPlayback({
-            subtitleMode,
-            preSelectedSubtitle
-        });
         let savedAudioIndex = hasPreSelectedAudio ? preSelectedAudio : undefined;
         let savedSubtitleIndex = hasPreSelectedSubtitle ? preSelectedSubtitle : undefined;
 
         if (savedAudioIndex === undefined && userDataAudioIndex !== undefined) {
             savedAudioIndex = userDataAudioIndex;
         }
-        if (!forceSubtitleOff && savedSubtitleIndex === undefined && userDataSubtitleIndex !== undefined) {
+        if (savedSubtitleIndex === undefined && userDataSubtitleIndex !== undefined) {
             savedSubtitleIndex = userDataSubtitleIndex;
         }
 
         if (savedAudioIndex === undefined && seasonPref.audio !== null) {
             savedAudioIndex = seasonPref.audio;
         }
-        if (!forceSubtitleOff && savedSubtitleIndex === undefined && seasonPref.subtitle !== null) {
+        if (savedSubtitleIndex === undefined && seasonPref.subtitle !== null) {
             savedSubtitleIndex = seasonPref.subtitle;
         }
 
@@ -949,7 +945,7 @@ class PlayerPage extends Page {
                 }
             }
 
-            if (!forceSubtitleOff && savedSubtitleIndex === undefined) {
+            if (savedSubtitleIndex === undefined) {
                 const sessionSubtitleLang = storage.getItem('session:lastSubtitleLang');
                 const sessionSubtitleTitle = storage.getItem('session:lastSubtitleTitle');
                 if (sessionSubtitleLang) {
@@ -970,6 +966,11 @@ class PlayerPage extends Page {
         }
 
         // 3. Fallback to defaults from MediaSource.
+        const forceSubtitleOff = shouldForceSubtitleOffForPlayback({
+            subtitleMode,
+            preSelectedSubtitle,
+            resolvedSubtitle: savedSubtitleIndex
+        });
         if (savedAudioIndex === undefined) {
             savedAudioIndex = mediaSource?.DefaultAudioStreamIndex;
         }
@@ -2116,6 +2117,10 @@ class PlayerPage extends Page {
         // below is intentionally throttled during startup, but track memory
         // must not be throttled: users often switch audio/subtitles in the
         // first seconds of playback and expect the choice to stick.
+        this._captureSessionTrackSelection(
+            data,
+            this._player?.getCurrentMediaSource?.() || this._player?._currentMediaSource || this._item.MediaSources?.[0]
+        );
         this._captureSeasonTrackPref(data);
 
         // Skip reporting during initial setup (first 2 seconds of play time) to avoid CPU contention.

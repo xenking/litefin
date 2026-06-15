@@ -326,7 +326,7 @@ const DEFAULTS = {
     // Persistence: scoped by (serverUrl, userId, seasonId) in localStorage with
     // an LRU cap of 50 seasons — oldest entries fall off silently. See
     // utils/SeasonTrackPrefStore.js.
-    persistTrackSelectionInSeason: false,
+    persistTrackSelectionInSeason: true,
 
     /**
      * =========================================================================

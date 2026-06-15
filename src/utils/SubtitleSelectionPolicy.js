@@ -1,4 +1,5 @@
-export function shouldForceSubtitleOffForPlayback({ subtitleMode, preSelectedSubtitle }) {
+export function shouldForceSubtitleOffForPlayback({ subtitleMode, preSelectedSubtitle, resolvedSubtitle }) {
     const hasExplicitSubtitleSelection = preSelectedSubtitle !== null && preSelectedSubtitle !== undefined;
-    return subtitleMode === 'None' && !hasExplicitSubtitleSelection;
+    const hasRestoredSubtitleSelection = resolvedSubtitle !== null && resolvedSubtitle !== undefined;
+    return subtitleMode === 'None' && !hasExplicitSubtitleSelection && !hasRestoredSubtitleSelection;
 }

@@ -44,6 +44,16 @@ globalThis.localStorage = {
         false,
         'explicit subtitle disable selection should remain explicit and skip restore fallbacks'
     );
+
+    assert.equal(
+        shouldForceSubtitleOffForPlayback({
+            subtitleMode: 'None',
+            preSelectedSubtitle: undefined,
+            resolvedSubtitle: 4
+        }),
+        false,
+        'subtitleMode=None should not override a saved local subtitle choice restored for playback'
+    );
 }
 
 {
@@ -395,6 +405,7 @@ globalThis.localStorage = {
 
 {
     const playerPageSource = readFileSync(new URL('../src/pages/PlayerPage.js', import.meta.url), 'utf8');
+    const playerSettingsSource = readFileSync(new URL('../src/utils/PlayerSettings.js', import.meta.url), 'utf8');
 
     assert.match(
         playerPageSource,
@@ -410,6 +421,16 @@ globalThis.localStorage = {
         playerPageSource,
         /_captureSessionTrackSelection\(selection, mediaSource\);[\s\S]*_captureSeasonTrackPref\(selection\);/,
         'explicit initial track picks should write through to session and season preference stores'
+    );
+    assert.match(
+        playerPageSource,
+        /_onMediaStreamsChange\(data\) \{[\s\S]*this\._captureSessionTrackSelection\(\s*data,[\s\S]*this\._captureSeasonTrackPref\(data\);/,
+        'runtime subtitle/audio changes should write through to session localStorage before progress throttling'
+    );
+    assert.match(
+        playerSettingsSource,
+        /persistTrackSelectionInSeason: true,/,
+        'season audio/subtitle persistence should default on so subtitle picks survive the next playback'
     );
 }
 
