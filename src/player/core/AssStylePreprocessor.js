@@ -10,13 +10,14 @@ const SIGN_LIKE_STYLE_RE = /(^|[\s_.-])(sign|signs|title|logo|op|ed|kara|karaoke
 const EXPLICIT_POSITION_RE = /\\(?:pos|move|org|clip|iclip)\s*\(/i;
 const DRAWING_MODE_RE = /\\p[1-9]\d*/i;
 const TOP_OR_MIDDLE_ALIGNMENT_RE = /\\an[4-9]/i;
+const BOTTOM_ALIGNMENT_RE = /\\(?:an[1-3]|a[1-3])(?!\d)/i;
 const MICRO_CUE_MAX_SECONDS = 0.12;
 const MICRO_CUE_MAX_GAP_SECONDS = 0.08;
 const MICRO_CUE_MIN_RUN_LENGTH = 8;
 
 export function preProcessAssContent(content, options = {}) {
     if (!content) {
-        return { content, stylesOverridden: 0, dialogueStyles: new Set(), coalescedSignRuns: 0 };
+        return { content, stylesOverridden: 0, dialogueStyles: new Set(), coalescedSignRuns: 0, dialogueLayersRaised: 0 };
     }
 
     const {
@@ -50,6 +51,7 @@ export function preProcessAssContent(content, options = {}) {
     let styleFormat = null;
     let eventFormat = null;
     let stylesOverridden = 0;
+    let dialogueLayersRaised = 0;
     let section = '';
 
     const processedLines = lines.map(line => {
@@ -94,12 +96,26 @@ export function preProcessAssContent(content, options = {}) {
         if (trimmed.startsWith('Dialogue:')) {
             const dialogue = parseDialogueLine(line, eventFormat);
             const isMainDialogue = dialogue && isMainDialogueCandidate(dialogue, metadata.styles.get(dialogue.style));
-            return stripInlineOverrides(line, {
+            const shouldRaiseDialogueLayer = dialoguePlacement?.anchor === 'top' &&
+                isMainDialogue &&
+                !hasInlineBottomAlignment(dialogue) &&
+                Number.isFinite(metadata.dialogueLayerOffset);
+            let nextLine = stripInlineOverrides(line, {
                 fontFamily,
                 shouldOverrideOutline: shouldOverrideOutline && (!dialoguePlacement || isMainDialogue),
                 shouldOverrideShadow: shouldOverrideShadow && (!dialoguePlacement || isMainDialogue),
                 shouldNormalizeFontSize: !!dialoguePlacement && isMainDialogue
             });
+
+            if (shouldRaiseDialogueLayer) {
+                const raised = raiseDialogueLayer(nextLine, eventFormat, metadata.dialogueLayerOffset);
+                nextLine = raised.line;
+                if (raised.changed) {
+                    dialogueLayersRaised++;
+                }
+            }
+
+            return nextLine;
         }
 
         return line;
@@ -109,7 +125,8 @@ export function preProcessAssContent(content, options = {}) {
         content: processedLines.join('\n'),
         stylesOverridden,
         dialogueStyles: metadata.dialogueStyles,
-        coalescedSignRuns: coalesced.runs
+        coalescedSignRuns: coalesced.runs,
+        dialogueLayersRaised
     };
 }
 
@@ -248,6 +265,8 @@ function collectAssMetadata(lines) {
     let playResY = 720;
     const styles = new Map();
     const dialogueStyles = new Set();
+    let maxNonDialogueLayer = null;
+    let minRaisableMainLayer = null;
 
     for (const line of lines) {
         const trimmed = line.trim();
@@ -287,8 +306,27 @@ function collectAssMetadata(lines) {
                 eventFormat = parseFormatLine(trimmed);
             } else if (trimmed.startsWith('Dialogue:')) {
                 const dialogue = parseDialogueLine(line, eventFormat);
-                if (dialogue && isMainDialogueCandidate(dialogue, styles.get(dialogue.style))) {
+                if (!dialogue) {
+                    continue;
+                }
+
+                if (isMainDialogueCandidate(dialogue, styles.get(dialogue.style))) {
                     dialogueStyles.add(dialogue.style);
+                    if (!hasInlineBottomAlignment(dialogue)) {
+                        const layer = parseAssLayer(dialogue.layer);
+                        if (Number.isFinite(layer)) {
+                            minRaisableMainLayer = minRaisableMainLayer === null
+                                ? layer
+                                : Math.min(minRaisableMainLayer, layer);
+                        }
+                    }
+                } else {
+                    const layer = parseAssLayer(dialogue.layer);
+                    if (Number.isFinite(layer)) {
+                        maxNonDialogueLayer = maxNonDialogueLayer === null
+                            ? layer
+                            : Math.max(maxNonDialogueLayer, layer);
+                    }
                 }
             }
         }
@@ -299,8 +337,11 @@ function collectAssMetadata(lines) {
         .filter(size => Number.isFinite(size) && size > 0)
         .sort((a, b) => a - b);
     const normalizedDialogueFontSize = median(dialogueFontSizes);
+    const dialogueLayerOffset = maxNonDialogueLayer !== null && minRaisableMainLayer !== null
+        ? Math.max(0, maxNonDialogueLayer + 1 - minRaisableMainLayer)
+        : null;
 
-    return { playResY, styles, dialogueStyles, normalizedDialogueFontSize };
+    return { playResY, styles, dialogueStyles, normalizedDialogueFontSize, dialogueLayerOffset };
 }
 
 function applyStyleOverrides(parts, styleFormat, options) {
@@ -393,6 +434,36 @@ function stripInlineOverrides(line, options) {
     });
 }
 
+function raiseDialogueLayer(line, eventFormat, layerOffset) {
+    if (!Number.isFinite(layerOffset) || layerOffset <= 0) {
+        return { line, changed: false };
+    }
+
+    const format = eventFormat || ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
+    const layerIdx = findFieldIndex(format, 'Layer');
+    if (layerIdx === -1) {
+        return { line, changed: false };
+    }
+
+    const raw = line.substring(line.indexOf(':') + 1);
+    const parts = splitAssFields(raw, format.length);
+    const currentLayer = parseAssLayer(parts[layerIdx]);
+    if (!Number.isFinite(currentLayer)) {
+        return { line, changed: false };
+    }
+
+    const bounds = findAssFieldBounds(raw, format, 'Layer');
+    if (!bounds) {
+        return { line, changed: false };
+    }
+
+    const nextLayer = String(Math.max(0, Math.floor(currentLayer + layerOffset)));
+    return {
+        line: line.slice(0, line.indexOf(':') + 1) + replaceField(raw, bounds, nextLayer),
+        changed: true
+    };
+}
+
 function isMainDialogueCandidate(dialogue, style) {
     if (!dialogue.style || SIGN_LIKE_STYLE_RE.test(dialogue.style)) {
         return false;
@@ -419,6 +490,7 @@ function isMainDialogueCandidate(dialogue, style) {
 function parseDialogueLine(line, eventFormat) {
     const format = eventFormat || ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
     const parts = splitAssFields(line.substring(line.indexOf(':') + 1), format.length);
+    const layer = getField(parts, format, 'Layer');
     const style = getField(parts, format, 'Style');
     const text = getField(parts, format, 'Text');
 
@@ -426,7 +498,16 @@ function parseDialogueLine(line, eventFormat) {
         return null;
     }
 
-    return { style, text };
+    return { layer, style, text };
+}
+
+function parseAssLayer(value) {
+    const layer = parseInt(String(value ?? '').trim(), 10);
+    return Number.isFinite(layer) ? layer : null;
+}
+
+function hasInlineBottomAlignment(dialogue) {
+    return BOTTOM_ALIGNMENT_RE.test(dialogue?.text || '');
 }
 
 function parseDialogueForCoalescing(line, eventFormat) {
@@ -594,6 +675,33 @@ function setField(parts, format, fieldName, value) {
 
 function findFieldIndex(format, fieldName) {
     return format.findIndex(name => name.toLowerCase() === fieldName.toLowerCase());
+}
+
+function findAssFieldBounds(raw, format, fieldName) {
+    const idx = findFieldIndex(format, fieldName);
+    if (idx === -1) return null;
+
+    let start = 0;
+    for (let i = 0; i < idx; i++) {
+        const comma = raw.indexOf(',', start);
+        if (comma === -1) return null;
+        start = comma + 1;
+    }
+
+    if (idx === format.length - 1) {
+        return { start, end: raw.length };
+    }
+
+    const end = raw.indexOf(',', start);
+    return end === -1 ? null : { start, end };
+}
+
+function replaceField(raw, bounds, value) {
+    const original = raw.slice(bounds.start, bounds.end);
+    const match = original.match(/^(\s*).*?(\s*)$/);
+    const prefix = match ? match[1] : '';
+    const suffix = match ? match[2] : '';
+    return raw.slice(0, bounds.start) + prefix + value + suffix + raw.slice(bounds.end);
 }
 
 function isSectionHeader(line) {

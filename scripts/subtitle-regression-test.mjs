@@ -110,6 +110,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,hello
 `;
 
+const forcedTopOverlapAss = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+Style: Screen Sign,Arial,80,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,30,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,Hello, world
+Dialogue: 1,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,second line
+Dialogue: 2,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,{\\an2}bottom pinned
+Dialogue: 3,0:00:01.00,0:00:03.00,Main,,0000,0000,0000,,{\\a2}legacy bottom pinned
+Dialogue: 8,0:00:01.00,0:00:03.00,Screen Sign,,0000,0000,0000,,{\\pos(640,60)}надпись
+`;
+
 function styleLine(content, name) {
     return content.split(/\r?\n/).find((line) => line.startsWith(`Style: ${name},`));
 }
@@ -124,6 +143,10 @@ function alignment(content, name) {
 
 function dialogueLine(content, text) {
     return content.split(/\r?\n/).find((line) => line.includes(text));
+}
+
+function dialogueLayer(content, text) {
+    return dialogueLine(content, text).substring('Dialogue:'.length).split(',')[0].trim();
 }
 
 function dialogueLines(content) {
@@ -211,6 +234,43 @@ function dialogueLines(content) {
     );
     assert.equal(alignment(result.content, 'Window Sign'), '2', 'sign style alignment should remain unchanged');
     assert.equal(marginV(result.content, 'Window Sign'), '40', 'sign style margin should remain unchanged');
+}
+
+{
+    const result = preProcessAssContent(forcedTopOverlapAss, {
+        dialoguePositionOverride: true,
+        bottomOffset: 750,
+        verticalPosition: '0',
+        videoHeight: 1080
+    });
+
+    assert.equal(
+        dialogueLayer(result.content, 'Hello, world'),
+        '9',
+        'forced-top main dialogue should render above sign/positioned ASS events'
+    );
+    assert.match(
+        dialogueLine(result.content, 'Hello, world'),
+        /Hello, world/,
+        'layer rewrite should preserve comma-space dialogue text'
+    );
+    assert.equal(
+        dialogueLayer(result.content, 'second line'),
+        '10',
+        'forced-top main dialogue should preserve relative authored layer order'
+    );
+    assert.equal(
+        dialogueLayer(result.content, 'bottom pinned'),
+        '2',
+        'inline bottom-aligned main dialogue should not be raised as if it moved to top'
+    );
+    assert.equal(
+        dialogueLayer(result.content, 'legacy bottom pinned'),
+        '3',
+        'legacy SSA bottom-aligned main dialogue should not be raised as if it moved to top'
+    );
+    assert.equal(dialogueLayer(result.content, 'надпись'), '8', 'sign layer should stay unchanged');
+    assert.equal(result.dialogueLayersRaised, 2, 'preprocessor should report the raised dialogue layers');
 }
 
 {

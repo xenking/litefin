@@ -332,7 +332,7 @@ export default class ASSRenderer {
             videoHeight: this._videoHeight
         });
 
-        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); coalesced ${result.coalescedSignRuns || 0} dense sign run(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
+        log.info(`ASS Pre-processor: Overrode ${result.stylesOverridden} style(s); raised ${result.dialogueLayersRaised || 0} dialogue layer(s); coalesced ${result.coalescedSignRuns || 0} dense sign run(s); dialogue styles: ${Array.from(result.dialogueStyles).join(', ') || 'none'}`);
         return result.content;
     }
 
