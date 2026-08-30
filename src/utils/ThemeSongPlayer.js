@@ -3,13 +3,14 @@
  * Litefin Tizen - Background Theme Song Player
  * ============================================================================
  * Optimized HTML5 background audio controller singleton.
- * Orchestrates premium, Apple-style smooth volumetric fades on TV systems,
+ * Orchestrates premium, smooth volumetric fades on TV systems,
  * ensuring hardware decoders are cleanly initialized and released.
  * ============================================================================
  */
 
 import { logger } from './Logger.js';
 import { eventBus } from '../core/EventBus.js';
+import { storage } from './StorageService.js';
 
 const log = logger.create('ThemeSongPlayer');
 
@@ -43,7 +44,6 @@ class ThemeSongPlayer {
         // ====================================================================
         // Playback Conflict Preventer
         // ====================================================================
-        // Under Apple's HIG principles, media experiences should be seamless.
         // We listen to the global application EventBus for any 'player:play' events.
         // As soon as video or trailer playback begins, we instantly silence the
         // background theme music to avoid conflicting overlapping audio tracks.
@@ -63,8 +63,20 @@ class ThemeSongPlayer {
         log.debug('Initializing HTML5 Audio element instance');
         this._audio = new Audio();
 
-        // Set standard properties for continuous background score ambiance
-        this._audio.loop = true;
+        // ====================================================================
+        // Audio Element Initialization & Lifecycle Listeners
+        // ====================================================================
+        // Initial loop state will be dynamically overwritten in play() based
+        // on the user's preference (pref:playThemeSongsOnce).
+        this._audio.loop = false;
+
+        // Listen for the track completion event when looping is disabled.
+        // Once the theme music reaches the end, reset active track references.
+        this._audio.addEventListener('ended', () => {
+            log.info('Theme song playback finished single cycle');
+            this._currentUrl = null;
+            this._ownerId = null;
+        });
 
         // Ensure volume starts fully silent for visual-auditory transition sync
         this._audio.volume = 0;
@@ -100,6 +112,17 @@ class ThemeSongPlayer {
         log.info('Starting theme song playback for owner', ownerId);
         this._currentUrl = url;
         this._ownerId = ownerId;
+
+        // ====================================================================
+        // Configure Loop Mode Based on User Preference
+        // ====================================================================
+        // Check if the user opted to play theme songs only once.
+        // Defaults to true (play once), so looping is disabled unless the user
+        // explicitly set 'pref:playThemeSongsOnce' to 'false' in Settings.
+        // ====================================================================
+        const playOnce = storage.getItem('pref:playThemeSongsOnce') !== 'false';
+        this._audio.loop = !playOnce;
+        log.debug(`Theme song audio loop mode set to: ${this._audio.loop} (playOnce: ${playOnce})`);
 
         try {
             // Load the new stream path into the HTML5 controller
@@ -225,27 +248,38 @@ class ThemeSongPlayer {
     }
 
     /**
-     * Interpolates volume from 0 to 1 for a premium entry transition.
+     * Interpolates volume from 0 to the user-configured target volume level
      */
     _fadeIn() {
+        // Read the user's custom volume preference from local storage.
+        // sound levels should default to a comfortable,
+        // ambient level (30% or 0.3) rather than blasting at 100%.
+        const targetVolume = parseFloat(storage.getItem('pref:themeSongVolume') || '0.3');
+
+        // Calculate the total number of updates needed to complete the transition
+        // based on the configured step size (e.g. 1500ms / 30ms = 50 steps).
         const steps = this.FADE_IN_DURATION / this.FADE_INTERVAL_STEP;
-        const volumeIncrement = 1 / steps;
+
+        // Compute the amount of volume to add during each step interval
+        const volumeIncrement = targetVolume / steps;
         let currentStep = 0;
 
         this._fadeInterval = setInterval(() => {
+            // Safety check: if audio instance is destroyed mid-fade, abort immediately
             if (!this._audio) {
                 this._clearFade();
                 return;
             }
 
             currentStep++;
-            // Slowly increase the volume fraction
-            const nextVolume = Math.min(1, currentStep * volumeIncrement);
+
+            // Slowly increase the volume level up to the target cap
+            const nextVolume = Math.min(targetVolume, currentStep * volumeIncrement);
             this._audio.volume = nextVolume;
 
-            // Target volume reached: end interpolation
-            if (nextVolume >= 1) {
-                log.debug('Volumetric fade-in transition completed');
+            // Target volume reached: clear the interval to stop looping
+            if (nextVolume >= targetVolume) {
+                log.debug('Volumetric fade-in transition completed with target:', targetVolume);
                 this._clearFade();
             }
         }, this.FADE_INTERVAL_STEP);

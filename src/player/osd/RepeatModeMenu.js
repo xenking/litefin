@@ -1,6 +1,13 @@
+// Base class representing generic menu configuration and focus loops.
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+
+// Centralized icon store providing scalable vector items.
+import { osdIcons } from '../../utils/Icons.js';
+
+// Core play queue manager managing playback sequencing and loop states.
 import { playQueue } from '../../core/PlayQueue.js';
+
+// Internationalization utility mapping language translations dynamically.
 import { i18n } from '../../utils/i18n.js';
 
 /**
@@ -41,6 +48,19 @@ export default class RepeatModeMenu extends BaseMenu {
             this.osd._currentFocusRow = this._prevRow;
             this.osd._currentFocusIndex = this._prevIndex;
             this.osd._updateFocus();
+
+            /*
+             * Lock out enter/click inputs for 350ms to absorb any ghost key presses
+             * or trailing clicks on the newly focused parent button on the OSD.
+             */
+            this.osd._focusRestoreLockout = true;
+            if (this.osd._focusRestoreLockoutTimer) {
+                clearTimeout(this.osd._focusRestoreLockoutTimer);
+            }
+            this.osd._focusRestoreLockoutTimer = setTimeout(() => {
+                this.osd._focusRestoreLockout = false;
+                this.osd._focusRestoreLockoutTimer = null;
+            }, 350);
         }
     }
 
@@ -59,23 +79,28 @@ export default class RepeatModeMenu extends BaseMenu {
 
         const currentMode = playQueue.getRepeatMode() || 'RepeatNone';
 
+        // Array list describing the available repeat modes and their mapped icons.
         const modes = [
-            { id: 'RepeatNone', label: i18n.t('Off'), key: 'Off', icon: ICONS.repeat },
-            { id: 'RepeatAll', label: i18n.t('RepeatAll'), key: 'RepeatAll', icon: ICONS.repeat },
-            { id: 'RepeatOne', label: i18n.t('RepeatOne'), key: 'RepeatOne', icon: ICONS.repeatOne }
+            { id: 'RepeatNone', label: i18n.t('Off'), key: 'Off' },
+            { id: 'RepeatAll', label: i18n.t('RepeatAll'), key: 'RepeatAll' },
+            { id: 'RepeatOne', label: i18n.t('RepeatOne'), key: 'RepeatOne' }
         ];
 
+        // Locate the array index corresponding to the active repeat setting.
         let selectedIndex = modes.findIndex(m => m.id === currentMode);
         if (selectedIndex === -1) selectedIndex = 0;
         this.focusIndex = selectedIndex;
 
+        // Iterate modes array to assemble HTML options elements.
         const optionsHtml = modes.map((mode, i) => {
+            // Check if loop item is currently selected in play queue.
             const isSelected = mode.id === currentMode;
+
+            // Build button layout displaying mode status and checkbox icon.
             return `
             <button class="track-option track-item ${isSelected ? 'selected' : ''}" data-id="${mode.id}" data-menu-index="${i}">
-                <span class="track-option-icon">${mode.icon}</span>
                 <span class="track-option-label" data-i18n="${mode.key}">${mode.label}</span>
-                ${isSelected ? `<span class="track-option-check">${ICONS.check}</span>` : ''}
+                ${isSelected ? `<span class="track-option-check">${osdIcons.check}</span>` : ''}
             </button>
         `}).join('');
 
@@ -91,6 +116,19 @@ export default class RepeatModeMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * Discard synthetic focus-clicks and Enter-synthesized clicks (detail === 0
+                 * or clientX === 0 && clientY === 0). D-pad Enter is handled exclusively
+                 * via handleKey() -> handleEnter().
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
+
                 this.focusIndex = parseInt(btn.dataset.menuIndex);
                 this.handleEnter();
             });
@@ -119,6 +157,7 @@ export default class RepeatModeMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
+                this.handleEnter();
                 return true;
             case 'back':
             case 'left':
@@ -147,7 +186,9 @@ export default class RepeatModeMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });

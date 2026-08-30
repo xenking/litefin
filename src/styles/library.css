@@ -23,12 +23,14 @@
      * CSS smooth-scroll conflicts with JS ScrollTo and causes laggy behavior. */
     scroll-behavior: auto;
 
-    /* GPU acceleration hints for smooth scrolling on TV devices */
+    /* NOTE: transform: translateZ(0) and will-change: scroll-position were
+     * intentionally removed. On Tizen 9.0's GPU compositor, they force a
+     * compositor layer allocation for the entire scroll container that must
+     * be invalidated and recreated on every layout change (card append/prepend,
+     * spacer resize). This causes more GPU memory pressure and repainting than
+     * the default non-layerized scroll path. Tizen 9.0's browser handles
+     * overflow-y: auto scrolling efficiently without these hints. */
     -webkit-overflow-scrolling: touch;
-    transform: translateZ(0);
-    will-change: scroll-position;
-    
-    display: block; /* Standard block layout eliminates Tizen 5.0 collapsing bugs */
 }
 
 /* --- Header Section --- */
@@ -84,10 +86,10 @@
     -webkit-border-radius: var(--jf-border-radius-lg);
     overflow: hidden;
     background-clip: padding-box;
-    background-color: rgba(40, 40, 40, 0.8);
-    /* Match Resume/Icon btn in details */
-    color: var(--jf-text-primary);
-    border: 2px solid var(--jf-action-btn-border)!important;
+    background: var(--jf-action-btn-bg);
+    background-clip: padding-box;
+    border: 2px solid var(--jf-action-btn-border) !important;
+    color: var(--jf-action-btn-color);
     font-size: 20px;
     font-weight: 600;
     cursor: pointer;
@@ -97,12 +99,22 @@
     transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
 
+/*
+ * ── ACTIVE TABS STYLING ──────────────────────────────────────────────────────
+ * Sets active/selected library tabs to the dynamic primary button background 
+ * and text variables to follow user display customization preferences.
+ */
 .tab-btn.active {
-    background-color: var(--jf-accent);
-    color: var(--jf-primary-btn-color);
+    background-color: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
+    border-color: var(--jf-btn-primary-border) !important;
 }
 
-/* Unified Focus Styles - Preserving Roundness */
+/*
+ * ── UNIFIED LIBRARY FOCUS STYLES ──────────────────────────────────────────────
+ * Unified remote-focus styles for navigation tabs, control buttons, footer
+ * pagination buttons, and empty-state buttons. Leverages theme focus vars.
+ */
 .tab-btn:focus,
 .tab-btn.focused,
 .control-btn:focus,
@@ -112,11 +124,11 @@
 .empty-state-btn:focus,
 .empty-state-btn.focused {
     outline: none !important;
-    background-color: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color, #ffffff) !important;
+    background-color: var(--jf-btn-primary-focus-bg) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
     transform: scale(1.08);
     z-index: 10;
-    border: 2px solid var(--jf-action-btn-active-border)!important;
+    border: 2px solid var(--jf-btn-primary-focus-border) !important;
     /* Only promote the ONE focused button to its own compositor layer.
        All others share the parent layer with zero GPU overhead. */
     will-change: transform;
@@ -171,9 +183,9 @@
     -webkit-border-radius: var(--jf-border-radius-lg);
     overflow: hidden;
     background-clip: padding-box;
-    background-color: rgba(40, 40, 40, 0.8);
-    color: var(--jf-text-primary);
-    border: 2px solid var(--jf-action-btn-border)!important;
+    background: var(--jf-action-btn-bg);
+    border: 2px solid var(--jf-action-btn-border) !important;
+    color: var(--jf-action-btn-color);
     font-size: 18px;
     font-weight: 600;
     cursor: pointer;
@@ -458,17 +470,22 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
     /* will-change applied on :focus only — see unified focus rule */
 }
 
+/*
+ * ── EMPTY STATE ACTION BUTTON FOCUS ──────────────────────────────────────────
+ * Redefines empty-state action button focus states using dynamic accent/focus
+ * attributes, preserving border-radius and smooth hover scaling.
+ */
 .empty-state-btn:focus,
 .empty-state-btn.focused,
 .empty-state-btn:hover {
-    background-color: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color, #ffffff) !important;
+    background-color: var(--jf-btn-primary-focus-bg) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
     transform: scale(1.1);
     outline: none !important;
     overflow: hidden !important;
-    /* Force Tizen 4 layer repaint to respect radius */
     border-radius: var(--jf-border-radius-lg) !important;
     -webkit-border-radius: var(--jf-border-radius-lg) !important;
+    /* Force Tizen 4 layer repaint to respect radius */
     -webkit-mask-image: -webkit-radial-gradient(white, black);
     mask-image: radial-gradient(white, black);
 }
@@ -484,6 +501,16 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
    ========================================================================== */
 
 .library-grid {
+    /* 
+     * =========================================================================
+     * DYNAMIC FLEX GRID BASE STRETCH
+     * =========================================================================
+     * Set default width to 100% to stretch across available viewport area.
+     * This avoids shrink-wrapping around a small number of items (which would 
+     * center them), while keeping the entire grid container aligned and scalable.
+     * =========================================================================
+     */
+    width: 100%;
     /* Flexbox wrap lets us control card width per view mode */
     display: flex;
     flex-wrap: wrap;
@@ -495,13 +522,12 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
     padding-bottom: 0;
     margin: 0 auto;
 }
-
 /* ── View mode: Poster (default) ─────────────────────────────────── */
 /* Standard 2:3 portrait card. Each card fixes at 320px — exactly 5 per 1080p row. 
-   Calculated: 5 * 320px + 4 * 20px = 1680px block width. */
+   Calculated: 5 * 320px + 4 * 20px = 1680px block width. 
+   Removed static min-width to prevent screen overflow on narrower displays. */
 .library-grid:not([class*="view-"]) {
     max-width: 1720px;
-    min-width: 1700px;
 }
 
 .library-grid:not([class*="view-"]) .media-card {
@@ -511,13 +537,6 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
        Calculated: (1820 total width - 100 content padding) = 1720.
        5 * 320px + 4 * 30px = 1600 + 120 = 1720px exactly. */
     margin-bottom: 30px;
-    
-    /* Premium Apple-style spring transition for focus 'pop' */
-    /* Premium Apple-style spring transition for focus 'pop'
-       Mandatory -webkit- prefixing for Chromium 32 compatibility. */
-    -webkit-transition: -webkit-transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.28s ease;
-    transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.28s ease;
-
     
     /* Isolate each card's layout/paint for smoother focus transitions */
     contain: layout style paint;
@@ -554,10 +573,10 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
 
 /* ── View mode: Small Poster ─────────────────────────────────────── */
 /* Tighter portrait cards (160px) — exactly 9 per 1080p row. 
-   Calculated: 9 * 160px + 8 * 20px = 1600px block width. */
+   Calculated: 9 * 160px + 8 * 20px = 1600px block width. 
+   Removed static min-width to support fluid responsiveness. */
 .library-grid.view-small-poster {
     max-width: 1664px;
-    min-width: 1470px;
 }
 
 .library-grid.view-small-poster .media-card {
@@ -583,10 +602,10 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
 
 /* ── View mode: Thumb ────────────────────────────────────────────── */
 /* 16:9 landscape cards (390px wide) — exactly 4 per 1080p row. 
-   Calculated: 4 * 390px + 3 * 30px = 1650px block width. */
+   Calculated: 4 * 390px + 3 * 30px = 1650px block width. 
+   Removed min-width to avoid horizontal clipping when sidebar is open. */
 .library-grid.view-thumb {
     max-width: 1680px;
-    min-width: 1670px;
 }
 
 .library-grid.view-thumb .media-card {
@@ -613,10 +632,10 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
 
 /* ── View mode: Banner ───────────────────────────────────────────── */
 /* Horizontal banners (540px wide) — exactly 3 per 1080p row. 
-   Calculated: 3 * 545px + 2 * 20px = 1675px block width. */
+   Calculated: 3 * 545px + 2 * 20px = 1675px block width. 
+   Removed min-width to prevent overflow while centering on wider viewports. */
 .library-grid.view-banner {
     max-width: 1695px; 
-    min-width: 1685px;
 }
 
 .library-grid.view-banner .media-card {
@@ -628,7 +647,7 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
     margin-right: 10px !important;
     margin-left: 10px !important;
     margin-bottom: 25px !important;
-    border-radius: 20px !important; /* Deeper, more premium Apple-style curve */
+    border-radius: 20px !important;
     -webkit-border-radius: 20px !important;
     background-clip: padding-box !important;
 }
@@ -707,7 +726,7 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
     background: rgba(255, 255, 255, 0.15) !important;
     -webkit-transform: scale(1.02);
     transform: scale(1.02); /* Slight pop to show selection */
-    box-shadow: 0 0 0 3px var(--jf-accent) !important; /* BOLD OUTER Focus Ring */
+    
     z-index: 10;
 }
 
@@ -891,12 +910,59 @@ html[data-layout-tier="ultra-legacy"] .alpha-btn::before {
 /* Reset media-card styles for Grid context */
 /* --- Media Fallback Styles moved to components.css --- */
 
+/* 
+ * =============================================================================
+ * DYNAMIC GRID LAYOUT ENGINE (FLUID COLUMNS)
+ * =============================================================================
+ * When the grid is set to "dynamic" mode, the column count is driven by the
+ * custom CSS property `--grid-columns` (e.g. set inline as 4, 6, 8, etc.).
+ *
+ * Defined at the end of the view-mode styles so its width and margin properties
+ * override static mode dimensions correctly due to CSS source ordering.
+ * =============================================================================
+ */
+.library-grid.mode-dynamic {
+    /* Custom property for the horizontal/vertical spacing between cards */
+    --grid-card-margin: 20px;
+    
+    /* 
+     * Pull the container right to offset the margin-right on the last child card.
+     * This ensures the grid bounds align perfectly with the parent container boundaries
+     * and prevents off-screen overhangs that trigger scroll layout bugs on Tizen 4.
+     */
+    margin-right: calc(-1 * var(--grid-card-margin)) !important;
+    width: calc(100% + var(--grid-card-margin)) !important;
+    max-width: none !important;
+    min-width: 0 !important;
+}
+
+.library-grid.mode-dynamic .media-card {
+    /* 
+     * Force layout containment to isolate paint operations and optimize 
+     * scrolling performance during focus transitions on low-spec TV hardware.
+     */
+    flex: 0 0 auto !important;
+    
+    /* 
+     * Divide 100% by the number of columns, then subtract the card margin.
+     * Card + margin-right will sum exactly to 100% / columns.
+     */
+    width: calc((100% / var(--grid-columns)) - var(--grid-card-margin)) !important;
+    min-width: 0 !important; /* Overrides static banner min-width */
+    margin-right: var(--grid-card-margin) !important;
+    margin-left: 0 !important;
+    margin-bottom: var(--grid-card-margin) !important;
+    
+    contain: layout style paint !important;
+}
+
+
 /* Premium Hover/Focus Polish for larger cards.
  * We use a deeper, more breathable shadow for the 320px cards. */
 .media-card:focus,
 .media-card.focused,
 .media-card:hover {
-    transform: scale(1.05); /* Slightly less aggressive scale for larger cards to avoid pixelation */
+    transform: scale(1.02); /* Slightly less aggressive scale for larger cards to avoid pixelation */
     z-index: 10;
 }
 
@@ -979,21 +1045,30 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
        Only the focused button gets promoted (via .alpha-btn:focus rule below). */
 }
 
+/*
+ * ── ALPHA PICKER ACTIVE LETTER STYLE ─────────────────────────────────────────
+ * Selected alphabetical index letters highlight using the theme's configured
+ * primary color, ensuring alignment with dynamic style choices.
+ */
 .alpha-btn.active {
-    color: var(--jf-accent);
+    color: var(--jf-btn-primary-bg) !important;
     font-weight: 700;
     transform: scale(1.2);
 }
 
+/*
+ * ── ALPHA PICKER FOCUS/HOVER HIGHLIGHT ───────────────────────────────────────
+ * Highlights alphabetical index buttons under active user focus or hover,
+ * dynamically binding background, text color, and border settings.
+ */
 .alpha-btn:focus,
 .alpha-btn.focused,
 .alpha-btn:hover {
     outline: none !important;
-    /* Remove square focus */
-    color: var(--jf-primary-btn-color, #ffffff) !important;
-    background-color: var(--jf-accent) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
+    background-color: var(--jf-btn-primary-focus-bg) !important;
     transform: scale(1.2);
-    border: 2px solid var(--jf-action-btn-active-border)!important;
+    border: 2px solid var(--jf-btn-primary-focus-border) !important;
     /* Promote only the one focused button to its own compositor layer */
     will-change: transform;
 }
@@ -1010,9 +1085,9 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
     padding: 20px 48px;
     margin: 0 20px;
     /* Spacing for Tizen */
-    background-color: rgba(60, 60, 60, 0.8);
-    color: var(--text-primary);
-    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: var(--jf-action-btn-bg);
+    border: 2px solid var(--jf-action-btn-border) !important;
+    color: var(--jf-action-btn-color);
     border-radius: var(--jf-border-radius-lg);
     -webkit-border-radius: var(--jf-border-radius-lg);
     overflow: hidden;
@@ -1029,11 +1104,17 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
     cursor: not-allowed;
 }
 
+/*
+ * ── PAGINATION FOOTER BUTTON FOCUS/HOVER ──────────────────────────────────────
+ * Updates pagination navigation control buttons' active focus and hover states
+ * using dynamic customizable buttons configurations variables.
+ */
 .pagination-btn:not(:disabled):focus,
 .pagination-btn.focused,
 .pagination-btn:not(:disabled):hover {
-    background-color: var(--jf-accent) !important;
-    border-color: var(--jf-accent) !important;
+    background-color: var(--jf-btn-primary-focus-bg) !important;
+    border-color: var(--jf-btn-primary-focus-border) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
     transform: scale(1.1);
 }
 
@@ -1066,11 +1147,6 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
     /* gap: 20px; GAP NOT SUPPORTED IN TIZEN 4 (Chrome 56) */
     transform: scale(0.9);
     transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* Spacer helpers for Flexbox gap polyfill */
-.library-modal>* {
-    margin-bottom: 20px;
 }
 
 .library-modal> :last-child {
@@ -1407,8 +1483,9 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
 }
 
 /* Actions Footer */
-.modal-actions {
-    padding: 30px 40px;
+.modal-actions-library {
+    padding: 0px 30px;
+    padding-top: 20px;
     background: rgba(0, 0, 0, 0.2);
     display: flex;
     justify-content: flex-end;
@@ -1436,19 +1513,25 @@ html[data-layout-tier="ultra-legacy"] .library-grid.view-list .media-card {
     margin-left: 0;
 }
 
+/*
+ * ── MODAL ACTION BUTTON FOCUS STATE ──────────────────────────────────────────
+ * Highlights modal actions (Apply / Close) under focus utilizing custom theme
+ * focus parameters for visual consistency.
+ */
 .modal-action-btn:focus,
 .modal-action-btn.focused {
-    border-color: var(--jf-action-btn-active-border)!important;
+    border-color: var(--jf-btn-primary-focus-border) !important;
     transform: scale(1.10);
-    background-color: var(--jf-accent);
+    background-color: var(--jf-btn-primary-focus-bg) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
     z-index: 10;
     outline: none;
     will-change: transform;
 }
 
 .modal-action-btn.apply {
-    background-color: var(--jf-accent);
-    color: var(--jf-primary-btn-color);
+    background-color: hsla(0, 0%, 100%, .1);
+    color: var(--jf-text-primary);
 }
 
 .modal-action-btn.clear,

@@ -121,14 +121,12 @@ export function getTextStyles(isHdr = false) {
 
     const borderWidth = PlayerSettings.get('subtitleBorderWidth') ?? 3;
     const borderPx = `${borderWidth}px`;
+    const borderOpacity = PlayerSettings.get('subtitleBorderOpacity') ?? 100;
 
-    // Generate valid RGBA for shadow and highlight (for 3D effects).
-    // Special case: 'border' mode forces 100% opacity for the outline,
-    // but we don't want to overwrite the user's stored 'subtitleDropShadowOpacity'
-    // for when they switch back to other shadow modes.
-    const effectiveOpacity = shadow === 'border' ? 100 : shadowOpacity;
-    const shadowColor = _hexToRgba(shadowColorHex, effectiveOpacity);
-    const highlightColor = _hexToRgba('#ffffff', effectiveOpacity); // Keep highlight white but respect opacity
+    // Generate valid RGBA for shadow, border, and highlight (for 3D effects).
+    const borderShadowColor = _hexToRgba(shadowColorHex, borderOpacity);
+    const shadowColor = _hexToRgba(shadowColorHex, shadowOpacity);
+    const highlightColor = _hexToRgba('#ffffff', shadowOpacity); // Keep highlight white but respect opacity
 
     switch (shadow) {
         case 'heavy':
@@ -158,9 +156,18 @@ export function getTextStyles(isHdr = false) {
             // Solid border logic using -webkit-text-stroke.
             // Using 'paint-order: stroke fill' ensures the border stays behind the text
             // so it doesn't thin out the glyphs even at high widths.
-            styles.push({ name: 'webkitTextStroke', value: `${borderPx} ${shadowColor}` });
+            styles.push({ name: 'webkitTextStroke', value: `${borderPx} ${borderShadowColor}` });
             styles.push({ name: 'paintOrder', value: 'stroke fill' });
             styles.push({ name: 'textShadow', value: 'none' });
+            break;
+        case 'uniform_border':
+            // Combines stroke-based border outline with uniform drop shadow blur.
+            styles.push({ name: 'webkitTextStroke', value: `${borderPx} ${borderShadowColor}` });
+            styles.push({ name: 'paintOrder', value: 'stroke fill' });
+            styles.push({
+                name: 'textShadow',
+                value: `${shadowColor} 0px 1px ${blurPx}, ${shadowColor} 0px -1px ${blurPx}, ${shadowColor} 1px 0px ${blurPx}, ${shadowColor} -1px 0px ${blurPx}, ${shadowColor} 1px 1px ${blurPx}, ${shadowColor} -1px 1px ${blurPx}, ${shadowColor} 1px -1px ${blurPx}, ${shadowColor} -1px -1px ${blurPx}`
+            });
             break;
         case 'none':
             styles.push({ name: 'textShadow', value: 'none' });
@@ -247,16 +254,28 @@ export function getTextStyles(isHdr = false) {
             styles.push({ className: 'font-proxima' });
             break;
         case 'baloo':
-            /* -------------------------------------------------------------
-               Baloo Bhaijaan 2 font option injected into styles array
-               ------------------------------------------------------------- */
             styles.push({ className: 'font-baloo' });
+            break;
+        case 'silkscreen':
+            styles.push({ className: 'font-silkscreen' });
+            break;
+        case 'space-grotesk':
+            styles.push({ className: 'font-space-grotesk' });
+            break;
+        case 'poiret-one':
+            styles.push({ className: 'font-poiret-one' });
+            break;
+        case 'zen-kaku-gothic-new':
+            styles.push({ className: 'font-zen-kaku-gothic-new' });
             break;
         case 'opendyslexic':
             styles.push({ className: 'font-opendyslexic' });
             break;
         case 'atkinson':
             styles.push({ className: 'font-atkinson' });
+            break;
+        case 'fallback-font':
+            styles.push({ className: 'font-fallback-font' });
             break;
         default:
             styles.push({ className: 'font-default' });
@@ -440,8 +459,11 @@ const fontClasses = [
     'font-inter',
     'font-proxima',
     'font-baloo',
+    'font-poiret-one',
+    'font-zen-kaku-gothic-new',
     'font-opendyslexic',
     'font-atkinson',
+    'font-fallback-font',
     'font-default'
 ];
 
@@ -529,14 +551,17 @@ export default {
             case 'proxima':
                 return 'font-proxima';
             case 'baloo':
-                /* -------------------------------------------------------------
-                   Map internal 'baloo' ID to '.font-baloo' class name
-                   ------------------------------------------------------------- */
                 return 'font-baloo';
+            case 'poiret-one':
+                return 'font-poiret-one';
+            case 'zen-kaku-gothic-new':
+                return 'font-zen-kaku-gothic-new';
             case 'opendyslexic':
                 return 'font-opendyslexic';
             case 'atkinson':
                 return 'font-atkinson';
+            case 'fallback-font':
+                return 'font-fallback-font';
             default:
                 return 'font-default';
         }
@@ -575,14 +600,19 @@ export default {
             case 'proxima':
                 return 'Proxima Nova';
             case 'baloo':
-                /* -------------------------------------------------------------
-                   Map internal 'baloo' ID to the CSS font-family name
-                   ------------------------------------------------------------- */
                 return 'Baloo Bhaijaan 2';
+            case 'space-grotesk':
+                return 'Space Grotesk';
+            case 'poiret-one':
+                return 'Poiret One';
+            case 'zen-kaku-gothic-new':
+                return 'Zen Kaku Gothic New';
             case 'opendyslexic':
                 return 'OpenDyslexic';
             case 'atkinson':
                 return 'Atkinson Hyperlegible';
+            case 'fallback-font':
+                return 'Jellyfin Fallback Font';
             default:
                 // Return null when no specific font is selected, so callers that
                 // respect a null value (e.g. _preProcessAssContent) won't override

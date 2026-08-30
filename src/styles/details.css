@@ -58,8 +58,8 @@
     right: 0;
     bottom: 0;
     background: linear-gradient(to bottom,
-            rgba(16, 16, 16, 0.6) 0%,
-            var(--jf-background) 100%);
+            rgba(16, 16, 16, 0.45) 0%,
+            var(--jf-background) 125%);
     /* PERFORMANCE: Isolate gradient from main layout */
     transform: translateZ(0);
 }
@@ -105,10 +105,154 @@
     -webkit-box-sizing: border-box;
 }
 
+/* Poster Right Aligned Layout Mode */
+.details-page.layout-poster-right .details-main-split {
+    flex-direction: row-reverse;
+}
+
+.details-page.layout-poster-right .hero-poster {
+    margin-right: 0;
+    margin-left: 40px;
+}
+
+/* Cinematic Backdrop Minimal Layout Mode */
+.details-page.layout-backdrop-minimal .hero-poster {
+    display: none !important;
+}
+
+.details-page.layout-backdrop-minimal .details-main-split {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-top: 16vh;
+    margin-bottom: 20px;
+}
+
+.details-page.layout-backdrop-minimal .details-info-col {
+    width: 100%;
+    align-items: center;
+    padding-bottom: 0;
+}
+
+.details-page.layout-backdrop-minimal .hero-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+.details-page.layout-backdrop-minimal .details-title-logo {
+    justify-content: center;
+    max-width: 600px;
+    height: 220px;
+    margin-bottom: 24px;
+}
+
+.details-page.layout-backdrop-minimal .details-title {
+    text-align: center;
+    max-width: 90%;
+    font-size: 4rem;
+}
+
+.details-page.layout-backdrop-minimal .details-original-title {
+    text-align: center;
+}
+
+.details-page.layout-backdrop-minimal .details-meta-row {
+    justify-content: center;
+    width: 100%;
+}
+
+.details-page.layout-backdrop-minimal .details-actions {
+    justify-content: center;
+    width: 100%;
+    margin-top: 12px;
+    margin-bottom: 24px;
+}
+
+.details-page.layout-backdrop-minimal .details-overview {
+    width: 100%;
+    text-align: left;
+    margin-top: 24px;
+}
+
+.details-page.layout-backdrop-minimal .details-backdrop {
+    -webkit-mask-image: linear-gradient(to bottom, black 85%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 85%, transparent 100%);
+}
+
+/* Cinematic Backdrop Left Aligned Layout Mode */
+.details-page.layout-backdrop-left .hero-poster {
+    display: none !important;
+}
+
+.details-page.layout-backdrop-left .details-main-split {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding-top: 16vh;
+    margin-bottom: 20px;
+}
+
+.details-page.layout-backdrop-left .details-info-col {
+    width: 100%;
+    align-items: flex-start;
+    padding-bottom: 0;
+}
+
+.details-page.layout-backdrop-left .hero-info {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+}
+
+.details-page.layout-backdrop-left .details-title-logo {
+    justify-content: flex-start;
+    max-width: 600px;
+    height: 220px;
+    margin-bottom: 24px;
+}
+
+.details-page.layout-backdrop-left .details-title {
+    text-align: left;
+    max-width: 90%;
+    font-size: 4rem;
+}
+
+.details-page.layout-backdrop-left .details-original-title {
+    text-align: left;
+}
+
+.details-page.layout-backdrop-left .details-meta-row {
+    justify-content: flex-start;
+    width: 100%;
+}
+
+.details-page.layout-backdrop-left .details-actions {
+    justify-content: flex-start;
+    width: 100%;
+    margin-top: 12px;
+    margin-bottom: 24px;
+}
+
+.details-page.layout-backdrop-left .details-overview {
+    width: 100%;
+    text-align: left;
+    margin-top: 24px;
+}
+
+.details-page.layout-backdrop-left .details-backdrop {
+    -webkit-mask-image: linear-gradient(to bottom, black 85%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 85%, transparent 100%);
+}
+
 .hero-poster {
     width: 420px;
     flex-shrink: 0;
-    margin-right: 60px;
+    margin-right: 40px;
     background-color: var(--jf-card-bg); /* Use base card bg while loading */
     border-radius: var(--jf-border-radius);
     -webkit-border-radius: var(--jf-border-radius);
@@ -205,7 +349,7 @@
 
 /* 
  * ============================================================================
- * Apple Human Interface Guidelines - Sleek Logo As Title Display
+ * Sleek Logo As Title Display
  * ============================================================================
  * When 'logo-only' title style is enabled, we completely bypass the standard 
  * absolute positioning on the top-right and instead pull the logo into the 
@@ -221,16 +365,16 @@
     /* Balanced scale: cinematic presence without overwhelming other metadata */
     width: 100%;
     max-width: 360px;
-    /* Clean vertical spacing for widescreen dynamic logos */
-    height: 110px;
-    /* Generous breathing room above actions and meta rows */
-    margin-top: 10px;
+    /* Default height before JS overrides it dynamically based on aspect ratio */
+    height: 100px;
+    /* Generous breathing room above actions and meta rows (optimized from 10px) */
+    margin-top: 0px;
     margin-bottom: 24px;
     pointer-events: none;
 }
 
 /* 
- * Premium Apple-Inspired Spring Dynamics
+ * Premium Spring Dynamics
  * Apply fluid spring mechanics to the logo entry by using high-tension 
  * cubic-bezier curves that scale and lift the image on successful load.
  */
@@ -290,6 +434,11 @@
     margin-bottom: 16px;
 }
 
+/* Custom class when secondary title uses secondary text color preference */
+.details-episode-info.secondary-color {
+    color: var(--jf-text-secondary);
+}
+
 .clickable-subtitle {
     cursor: pointer;
     display: inline-block;
@@ -298,6 +447,17 @@
 
 .clickable-subtitle:hover {
     opacity: 0.8;
+}
+
+/* Clickable logo styling for Seasons/Episodes */
+.clickable-logo {
+    cursor: pointer;
+    pointer-events: auto !important;
+    transition: opacity 0.2s ease;
+}
+
+.clickable-logo:hover {
+    opacity: 0.8 !important;
 }
 
 /* Metadata Row */
@@ -352,7 +512,7 @@
 .meta-ends-at {
     color: var(--jf-text-secondary);
     /* Improved readability */
-    font-size: 1.3rem;
+    font-size: 1.4rem;
 }
 
 .details-actions {
@@ -394,17 +554,15 @@
     transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
     border: 3px solid transparent;
     background-clip: padding-box;
-    /* Add bottom spacing to prevent overlapping when buttons wrap dynamically */
-    margin-bottom: 12px;
 }
 
 
-/* Primary Play/Resume Buttons - Inverted Mode (White BG, Blue Text) */
+/* Primary Play/Resume Buttons - Unfocused style matches the rest of the buttons */
 .play-btn,
 .resume-btn {
-    background: var(--jf-primary-btn-color);
-    color: var(--jf-accent);
-    border: 2px solid var(--jf-primary-btn-color) !important;
+    background: var(--jf-action-btn-bg);
+    color: var(--jf-text-primary, #fff);
+    border: 2px solid var(--jf-action-btn-border) !important;
 }
 
 .play-btn:focus,
@@ -413,11 +571,10 @@
 .resume-btn.focused {
     -webkit-transform: scale(1.05);
     transform: scale(1.05);
-    background: var(--jf-accent);
-    color: var(--jf-primary-btn-color);
-    border-color: var(--jf-button-border-focus);
+    background: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
+    border-color: var(--jf-btn-primary-border) !important;
     outline: none !important;
-    border: 2px solid var(--jf-button-border-focus) !important;
 }
 
 
@@ -537,37 +694,72 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     margin: 0;
 }
 
-/* Active State (Heart Filled / Checked) */
+/* Active State (Heart Filled / Checked) - Background matches rest of buttons, icon is colored */
 .btn-icon.active {
-    /* Inverted Mode (White BG, Blue Icon) */
-    background: var(--jf-primary-btn-color);
+    background: var(--jf-action-btn-bg);
     color: var(--jf-accent);
-    border-color: var(--jf-primary-btn-color) !important;
+    border-color: var(--jf-action-btn-border) !important;
 }
 
 /* Focus State (Unified) */
 .btn-icon:focus,
 .btn-icon.focused {
-    -webkit-transform: scale(1.15); /* Slightly larger than standard OSD for prominence */
-    transform: scale(1.15); /* Slightly larger than standard OSD for prominence */
-    background: var(--jf-accent);
-    color: var(--jf-primary-btn-color) !important;
-    border-color: var(--jf-button-border-focus) !important;
+    -webkit-transform: scale(1.15); /* Slightly larger than OSD for prominence */
+    transform: scale(1.15); /* Slightly larger than OSD for prominence */
+    background: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
+    border-color: var(--jf-btn-primary-border) !important;
     outline: none !important;
 }
 
 
 /* 
  * Active + Focused State: 
- * All buttons revert to standard app focus (Blue background, White text).
+ * All buttons use the dynamic active/focused button colors.
  */
 .btn-icon.active:focus,
 .btn-icon.active.focused {
-    background: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color) !important;
-    border-color: var(--jf-button-border-focus) !important;
+    background: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
+    border-color: var(--jf-btn-primary-border) !important;
     transform: scale(1.15);
 }
+
+/* 
+ * ============================================================================
+ * Dynamic Icon Variant Toggling (Outlined vs. Filled)
+ * ============================================================================
+ * Support responsiveness for "dynamic" icon variants where both outline and 
+ * filled SVGs are loaded simultaneously. Hide the filled icons by default,
+ * showing outline state, and swap them seamlessly when focused, hovered, 
+ * or when the action button itself is marked active.
+ * ============================================================================
+ */
+.details-actions .btn .icon-filled,
+.details-actions .btn-icon .icon-filled {
+    display: none;
+}
+
+.details-actions .btn:focus .icon-filled,
+.details-actions .btn.focused .icon-filled,
+.details-actions .btn:hover .icon-filled,
+.details-actions .btn-icon:focus .icon-filled,
+.details-actions .btn-icon.focused .icon-filled,
+.details-actions .btn-icon:hover .icon-filled,
+.details-actions .btn-icon.active .icon-filled {
+    display: inline-block;
+}
+
+.details-actions .btn:focus .icon-outline,
+.details-actions .btn.focused .icon-outline,
+.details-actions .btn:hover .icon-outline,
+.details-actions .btn-icon:focus .icon-outline,
+.details-actions .btn-icon.focused .icon-outline,
+.details-actions .btn-icon:hover .icon-outline,
+.details-actions .btn-icon.active .icon-outline {
+    display: none;
+}
+
 
 /* 
  * Pulse Animation Trigger:
@@ -600,7 +792,6 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     font-size: 1.5rem;
     line-height: 1.5;
     color: var(--jf-text-secondary);
-    max-width: 1200px;
     margin-bottom: 12px;
     /* Text rendering opt */
     text-rendering: optimizeLegibility;
@@ -611,6 +802,13 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
      * still collapsing sequential whitespace and wrapping lines normally.
      */
     white-space: pre-line;
+}
+
+.overview-text a {
+    pointer-events: none;
+    cursor: default;
+    text-decoration: none;
+    color: inherit;
 }
 
 .line-clamp-6 {
@@ -632,13 +830,12 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     background-clip: padding-box;
 }
 
-
 .details-rich-meta:focus,
 .details-rich-meta.active-table,
 .details-rich-meta.focused {
-    border-color: var(--jf-accent);
+    border-color: var(--jf-btn-primary-bg) !important;
     /* Focus highlight */
-    background-color: rgba(255, 255, 255, 0.02);
+    background-color: rgba(var(--jf-accent-dark-rgb,15,15,20),0.65);
     outline: none;
 }
 
@@ -659,7 +856,7 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     width: 120px;
     flex-shrink: 0;
     color: var(--jf-text-secondary);
-    font-size: 1.1rem;
+    font-size: 1.2rem;
     font-weight: 500;
 }
 
@@ -669,6 +866,7 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     flex-wrap: wrap;
     /* gap: 8px; REMOVED for perf */
 }
+
 
 .meta-chip {
     margin-right: 4px;
@@ -693,18 +891,23 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
 }
 
 
+/*
+ * ── RICH DATA METADATA CHIPS FOCUS/HOVER HIGHLIGHT ───────────────────────────
+ * Enhances focused or hovered metadata chips (genres, studios, tags, directors)
+ * on the details page. Dynamically maps to custom button accent colors.
+ */
 .meta-chip:hover,
 .meta-chip:focus,
 .meta-chip.focused {
-    background-color: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color) !important;
-    border-color: var(--jf-button-border-focus) !important;
+    background-color: var(--jf-btn-primary-focus-bg) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
+    border-color: var(--jf-btn-primary-focus-border) !important;
     transform: scale(1.1);
     opacity: 1;
     outline: none !important;
     text-decoration: none !important;
     z-index: 5;
-    /* Promote only the focused chip */
+    /* Promote only the focused chip to avoid unnecessary composite layers */
     will-change: transform;
 }
 
@@ -757,29 +960,30 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
 }
 
 .see-more-btn {
-    background: rgba(40, 40, 40, 0.8);
-    border: 2px solid rgba(255, 255, 255, 0.2);
+    background: var(--jf-action-btn-bg);
+    border: 2px solid var(--jf-action-btn-border) !important;
     border-radius: var(--jf-border-radius-lg);
     -webkit-border-radius: var(--jf-border-radius-lg);
     overflow: hidden;
     background-clip: padding-box;
-    color: var(--jf-text-primary);
+    color: var(--jf-text-primary, #fff);
     font-size: 1.1rem;
     font-weight: 600;
     padding: 6px 12px;
     display: inline-block;
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
 }
 
 .see-more-btn:hover {
     background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
 .see-more-btn:focus,
 .see-more-btn.focused {
-    background: var(--jf-accent);
-    border-color: var(--jf-button-border-focus);
-    color: var(--jf-primary-btn-color);
+    background: var(--jf-btn-primary-bg) !important;
+    border-color: var(--jf-btn-primary-border) !important;
+    color: var(--jf-btn-primary-color) !important;
     outline: none !important;
     -webkit-transform: scale(1.05);
     transform: scale(1.05);
@@ -968,6 +1172,41 @@ html[data-layout-tier="ultra-legacy"] .details-actions .btn-icon svg {
     align-items: center;
     /* REDUNDANT: Container level */
     /* transform: translateZ(0); */
+}
+
+/*
+ * ── FAVORITE BUTTON DYNAMIC ICON STATES ──────────────────────────────────────
+ * Manages the transitions between outlined and filled states for the favorite
+ * heart icons, unfocused non-favorites remain outlined, 
+ * while hover/focus/active states instantly swap to the premium filled
+ * SVG representation for clear interactive feedback.
+ */
+
+/* By default, hide the filled SVG to allow the outlined structure to show */
+.favorite-btn .icon-filled {
+    display: none;
+}
+
+/* 
+ * Display the filled SVG when the button is active (marked as favorite)
+ * or when the user hovers or focuses the button.
+ */
+.favorite-btn.active .icon-filled,
+.favorite-btn:focus .icon-filled,
+.favorite-btn.focused .icon-filled,
+.favorite-btn:hover .icon-filled {
+    display: inline-block;
+}
+
+/*
+ * Hide the outline SVG when the filled SVG is shown to prevent rendering
+ * duplicate icons concurrently.
+ */
+.favorite-btn.active .icon-outline,
+.favorite-btn:focus .icon-outline,
+.favorite-btn.focused .icon-outline,
+.favorite-btn:hover .icon-outline {
+    display: none;
 }
 
 .btn-icon-text {

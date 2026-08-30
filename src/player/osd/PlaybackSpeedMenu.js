@@ -1,6 +1,13 @@
+// Base class representing standard player menu structures and layouts.
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+
+// Centralized icon store loaded globally to reuse SVG layouts for playback menu checks.
+import { osdIcons } from '../../utils/Icons.js';
+
+// Class level logger to log changes to the media player speed settings.
 import { logger } from '../../utils/Logger.js';
+
+// Localization function library for translation of player UI elements.
 import { i18n } from '../../utils/i18n.js';
 
 const log = logger.create('PlaybackSpeedMenu');
@@ -53,6 +60,19 @@ export default class PlaybackSpeedMenu extends BaseMenu {
             this.osd._currentFocusRow = this._prevRow;
             this.osd._currentFocusIndex = this._prevIndex;
             this.osd._updateFocus();
+
+            /*
+             * Lock out enter/click inputs for 350ms to absorb any ghost key presses
+             * or trailing clicks on the newly focused parent button on the OSD.
+             */
+            this.osd._focusRestoreLockout = true;
+            if (this.osd._focusRestoreLockoutTimer) {
+                clearTimeout(this.osd._focusRestoreLockoutTimer);
+            }
+            this.osd._focusRestoreLockoutTimer = setTimeout(() => {
+                this.osd._focusRestoreLockout = false;
+                this.osd._focusRestoreLockoutTimer = null;
+            }, 350);
         }
     }
 
@@ -71,10 +91,19 @@ export default class PlaybackSpeedMenu extends BaseMenu {
 
         const currentSpeed = this.osd.player.getPlaybackSpeed();
 
+        // Loop through all speeds to construct the options template.
         const optionsHtml = this.options.map((opt, i) => {
+            // Determine if the speed index is equal to current playback rate.
             const isSelected = opt.id === currentSpeed;
-            const checkIcon = isSelected ? ICONS.check : '';
             
+            // ================================================================
+            // Dynamic Selection Mark
+            // ================================================================
+            // Checkmark SVG applied to option that is actively used.
+            // We use the unified check icon directly.
+            const checkIcon = isSelected ? osdIcons.check : '';
+            
+            // Build and return the HTML button structure for the specific speed.
             return `
             <button class="track-option track-item ${isSelected ? 'selected' : ''}" 
                     data-id="${opt.id}" data-menu-index="${i}">
@@ -97,6 +126,19 @@ export default class PlaybackSpeedMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * Discard synthetic focus-clicks and Enter-synthesized clicks (detail === 0
+                 * or clientX === 0 && clientY === 0). D-pad Enter is handled exclusively
+                 * via handleKey() -> handleEnter().
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
+
                 this.focusIndex = parseInt(btn.dataset.menuIndex);
                 this.handleEnter();
             });
@@ -124,7 +166,8 @@ export default class PlaybackSpeedMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
-                return true; // Click handled by click listener
+                this.handleEnter();
+                return true;
             case 'back':
             case 'left':
             case 'right':
@@ -152,7 +195,9 @@ export default class PlaybackSpeedMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });

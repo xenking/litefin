@@ -35,16 +35,22 @@
 }
 
 .btn-primary {
-    background: var(--jf-accent);
-    color: var(--jf-primary-btn-color);
+    background: var(--jf-btn-primary-bg);
+    color: var(--jf-btn-primary-color);
+    border: 3px solid var(--jf-btn-primary-border) !important;
     margin: 0px;
     margin-left: 8px;
 }
 
 .btn-primary:focus,
 .btn-primary.focused {
-    background: var(--jf-accent-hover);
-    color: var(--jf-primary-btn-color);
+    background: var(--jf-btn-primary-focus-bg);
+    color: var(--jf-btn-primary-focus-color);
+    border-color: var(--jf-btn-primary-focus-border) !important;
+}
+
+.btn-primary:hover {
+    border-color: var(--jf-btn-primary-hover-border) !important;
 }
 
 
@@ -269,7 +275,7 @@ progress.card-progress::-webkit-progress-bar {
 }
 
 progress.card-progress::-webkit-progress-value {
-    /* Premium Apple-style gradient */
+    /* Premium gradient */
     background: linear-gradient(90deg, var(--jf-accent) 0%, var(--jf-accent-hover) 100%);
     /* Ensure sharp edges for the value bar */
     border-radius: 0;
@@ -318,7 +324,7 @@ progress.card-progress::-webkit-progress-value {
     z-index: 1;
 }
 
-/* Gradient Variants (Apple-style) */
+/* Gradient Variants */
 .grad-1 {
     background: linear-gradient(135deg, #007aff 0%, #004a99 100%);
 }
@@ -466,7 +472,7 @@ progress.card-progress::-webkit-progress-value {
     display: flex;
     flex-direction: column;
     position: relative;
-    width: 600px;
+    width: 750px;
     max-width: 90%;
     max-height: 80vh;
     min-height: 180px; /* Lower minimum for short dialogs (e.g. Delete?) */
@@ -636,7 +642,7 @@ progress.card-progress::-webkit-progress-value {
 }
 
 
-/* Base Badge Styling: Clean, Apple-style pills with glassmorphism */
+/* Base Badge Styling */
 .track-badge {
     display: inline-flex;
     align-items: center;
@@ -677,63 +683,108 @@ progress.card-progress::-webkit-progress-value {
 
 /* Focused State: Use dynamic contrast color instead of hardcoded white */
 .modal-option-btn.focused .track-badge {
-    background: rgba(var(--jf-primary-btn-color-rgb), 0.15) !important;
-    border-color: rgba(var(--jf-primary-btn-color-rgb), 0.35) !important;
-    color: var(--jf-primary-btn-color) !important;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background: rgba(var(--jf-btn-primary-focus-color-rgb), 0.15) !important;
+    border-color: rgba(var(--jf-btn-primary-focus-color-rgb), 0.35) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
 }
 
 .modal-option-btn.focused .track-badge.badge-success,
 .modal-option-btn.focused .track-badge.badge-warning,
 .modal-option-btn.focused .track-badge.badge-danger {
-    background: rgba(var(--jf-primary-btn-color-rgb), 0.2) !important;
-    border-color: rgba(var(--jf-primary-btn-color-rgb), 0.4) !important;
-    color: var(--jf-primary-btn-color) !important;
+    background: rgba(var(--jf-btn-primary-focus-color-rgb), 0.2) !important;
+    border-color: rgba(var(--jf-btn-primary-focus-color-rgb), 0.4) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
 }
 
 
+/*
+ * ── SELECTED MODAL OPTION STYLE ──────────────────────────────────────────────
+ * Maps selected modal options (e.g. tracks, audio, subtitles, qualities) to
+ * the dynamic button theme background variables for consistent color flow.
+ */
 .modal-option-btn.selected {
-    background: rgba(var(--jf-accent-rgb), 0.1);
-    border-color: var(--jf-accent);
+    background: rgba(var(--jf-accent-rgb), 0.1) !important;
+    border-color: var(--jf-btn-primary-bg) !important;
     color: var(--jf-text-primary);
 }
 
-
+/*
+ * ── FOCUSED MODAL OPTION STYLE ───────────────────────────────────────────────
+ * Highlights focused modal option items using customizable button focus states.
+ */
 .modal-option-btn:focus,
 .modal-option-btn.focused {
-    background: var(--jf-accent) !important; /* Force priority over .selected */
-    color: var(--jf-primary-btn-color) !important;
-    /* Subtle white inner border */
+    background: var(--jf-btn-primary-focus-bg) !important; /* Force priority over .selected */
+    color: var(--jf-btn-primary-focus-color) !important;
     outline: none;
-    transform: scale(1.03);
-    border: 2px solid var(--jf-action-btn-active-border)!important;
+    transform: scale(1.01);
+    border: 2px solid var(--jf-btn-primary-focus-border) !important;
     will-change: transform;
 }
 
 .modal-option-btn:hover {
-    transform: scale(1.03);
-    border: 2px solid var(--jf-action-btn-active-border)!important;
+    transform: scale(1.01);
+    border: 2px solid var(--jf-btn-primary-focus-border) !important;
     will-change: transform;
 }
 
-
+/*
+ * ── SELECTED MODAL OPTION CHECK ICON ─────────────────────────────────────────
+ * Configures the selection checkmarks/icons inside list modal items to follow
+ * dynamic button colors and focus text color properties.
+ */
 .modal-option-btn .check-icon {
     display: inline-block;
     vertical-align: middle;
     width: 20px;
-    height: 20px;
+    height: 32px;
     margin-right: 1.2em; /* Spacing from text */
     flex-shrink: 0;
     opacity: 0; /* Hidden by default */
-    color: var(--jf-accent);
+    color: var(--jf-btn-primary-bg) !important;
 }
 
+/*
+ * Force Selection Modals to only display the filled check icon variant.
+ * Since the checkmark is only visible when an option is selected, we hide 
+ * the outlined SVG state entirely and force the filled state to display,
+ * applying the high-contrast primary text color.
+ */
+/*
+ * Switch between outline and filled check icon variant based on selected/focus state.
+ *
+ * Design Guidelines:
+ * - If the option is selected and unfocused: display the outline checkmark icon.
+ * - If the option is selected and focused/hovered: switch to the filled checkmark icon.
+ * - Apply a premium look by styling the filled icon with the primary text color variable.
+ */
+
+/* By default, show outline icon, hide filled icon */
+.modal-option-btn .check-icon .icon-outline {
+    display: inline-block;
+}
+
+.modal-option-btn .check-icon .icon-filled {
+    display: none;
+    color: var(--jf-text-primary) !important;
+}
+
+/* Make selected icons visible */
 .modal-option-btn.selected .check-icon {
     opacity: 1;
 }
 
-.modal-option-btn.focused .check-icon {
-    color: var(--jf-primary-btn-color) !important;
+/* Switch outline icon to hidden and filled icon to visible on focus or hover */
+.modal-option-btn.selected.focused .check-icon .icon-outline,
+.modal-option-btn.selected:focus .check-icon .icon-outline,
+.modal-option-btn.selected:hover .check-icon .icon-outline {
+    display: none;
+}
+
+.modal-option-btn.selected.focused .check-icon .icon-filled,
+.modal-option-btn.selected:focus .check-icon .icon-filled,
+.modal-option-btn.selected:hover .check-icon .icon-filled {
+    display: inline-block;
 }
 
 /* Filter/Sort column layout: flex for modern/legacy, floats for ultra-legacy (Chrome 32) */
@@ -816,13 +867,74 @@ progress.card-progress::-webkit-progress-value {
 .modal-action-btn:focus,
 .modal-action-btn:hover,
 .modal-action-btn.focused {
-    background: var(--jf-accent);
+    background: var(--jf-btn-primary-bg) !important;
     /* High contrast text color calculated by ThemeUtils */
-    color: var(--jf-primary-btn-color, #ffffff);
+    color: var(--jf-btn-primary-color) !important;
     outline: none;
     transform: scale(1.05);
-    border-color: var(--jf-action-btn-active-border, transparent);
+    border-color: var(--jf-btn-primary-border) !important;
     z-index: 10;
+}
+
+/* Playlist Editor Modal styles */
+.pe-selector-label {
+    font-size: 1.1rem;
+    opacity: 0.7;
+    min-width: 80px;
+    margin-right: 16px;
+}
+
+.pe-selector-value {
+    flex: 1;
+    text-align: right;
+    margin-right: 8px;
+    font-weight: 600;
+}
+
+.pe-chevron {
+    font-size: 1.8rem;
+    opacity: 0.5;
+    transition: transform 0.2s ease;
+}
+
+.modal-option-btn:focus .pe-chevron,
+.modal-option-btn.focused .pe-chevron {
+    transform: translateX(4px);
+}
+
+.modal-field-group {
+    padding: 4px 4px 16px;
+}
+
+.modal-field-label {
+    display: block;
+    color: var(--jf-text-secondary, #b0b0b0);
+    font-size: 1.1rem;
+    font-weight: 400;
+    margin-bottom: 8px;
+}
+
+.playlist-name-input {
+    width: 100%;
+    padding: 16px 20px;
+    font-size: 1.3rem;
+    background: var(--jf-input-bg, rgba(255, 255, 255, 0.06));
+    border: 2px solid var(--jf-input-border, rgba(255, 255, 255, 0.15));
+    border-radius: var(--jf-border-radius, 8px);
+    color: var(--jf-text-primary);
+    box-sizing: border-box;
+}
+
+.playlist-name-input:focus,
+.playlist-name-input.focused {
+    border-color: var(--jf-button-border-focus, var(--jf-accent));
+    outline: none;
+}
+
+.btn-add:focus,
+.btn-add.focused {
+    background: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
 }
 
 /* Secondary/Cancel styling: Lower prominence but perfect readability */
@@ -850,7 +962,7 @@ progress.card-progress::-webkit-progress-value {
     /* Keep secondary buttons visually distinct even when focused */
     background: rgba(var(--jf-text-primary-rgb, 255, 255, 255), 0.15);
     color: var(--jf-text-primary);
-    border: 3px solid var(--jf-accent) !important;
+    border: 3px solid var(--jf-btn-primary-bg) !important;
 }
 
 /* Redesigned Danger Button for Destructive Modal Actions (e.g. Exit, Delete) */
@@ -870,9 +982,9 @@ progress.card-progress::-webkit-progress-value {
 /* Modal Close Button Focus (Individualized) */
 .modal-close-btn:focus,
 .modal-close-btn.focused {
-    background: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color) !important;
-    border-color: var(--jf-primary-btn-color) !important;
+    background: var(--jf-btn-primary-bg) !important;
+    color: var(--jf-btn-primary-color) !important;
+    border-color: var(--jf-btn-primary-border) !important;
     transform: scale(1.01) !important;
     outline: none !important;
 }
@@ -1000,10 +1112,9 @@ progress.card-progress::-webkit-progress-value {
 .subtitle-result-btn:focus .track-badge,
 .track-option.focused .track-badge,
 .track-option:focus .track-badge {
-    background-color: rgba(var(--jf-primary-btn-color-rgb), 0.15) !important;
-    color: var(--jf-primary-btn-color);
-    border-color: rgba(var(--jf-primary-btn-color-rgb), 0.35) !important;
-
+    background-color: rgba(var(--jf-btn-primary-focus-color-rgb), 0.15) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
+    border-color: rgba(var(--jf-btn-primary-focus-color-rgb), 0.35) !important;
 }
 
 .track-label-text {
@@ -1732,3 +1843,87 @@ html[data-layout-tier="ultra-legacy"] .subtitle-result-info {
 html[data-layout-tier="ultra-legacy"] .subtitle-result-meta {
     display: block;
 }
+
+/* ==========================================================================
+   Card Text Marquee Scrolling (Loop Overflowing Titles/Subtitles)
+   ========================================================================== */
+.card-title,
+.card-subtitle {
+    display: block;
+    position: relative;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.card-title span,
+.card-subtitle span {
+    display: inline-block;
+    white-space: nowrap;
+    will-change: transform;
+    /* Use dynamic spring-like transitions for reset focus animations */
+    transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* When the card is focused, disable truncation and apply alternate animation */
+.media-card.focused .card-title.marquee-active,
+.media-card.focused .card-subtitle.marquee-active {
+    text-overflow: clip;
+}
+
+.media-card.focused .card-title.marquee-active span,
+.media-card.focused .card-subtitle.marquee-active span {
+    animation: card-text-marquee var(--marquee-duration, 4s) linear infinite alternate;
+}
+
+/* Alternate keyframes for smooth scrolling back-and-forth */
+@keyframes card-text-marquee {
+    0%, 20% {
+        transform: translate3d(0, 0, 0);
+    }
+    80%, 100% {
+        transform: translate3d(var(--scroll-dist, 0px), 0, 0);
+    }
+}
+
+/* ==========================================================================
+   Description Dialog Modal Styling
+   ========================================================================== */
+.description-dialog-modal {
+    width: 1350px;
+    max-width: 96%;
+    max-height: 88vh;
+}
+
+.description-dialog-modal .modal-header h2 {
+    font-size: 2rem;
+    padding: 20px 24px;
+}
+
+.description-dialog-content {
+    padding: 36px 48px;
+    font-size: 1.65rem;
+    line-height: 1.8;
+    color: var(--jf-text-primary);
+    outline: none;
+    border-radius: var(--jf-border-radius);
+    max-height: calc(88vh - 110px);
+}
+
+.description-dialog-content:focus,
+.description-dialog-content.focused {
+    box-shadow: inset 0 0 0 3px var(--jf-accent);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.description-dialog-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--jf-text-primary);
+    font-size: 1.65rem;
+}
+
+
+
+

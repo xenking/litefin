@@ -1,5 +1,5 @@
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+import { osdIcons } from '../../utils/Icons.js';
 import { MediaHelper } from '../core/MediaHelper.js';
 import { PlayerSettings } from '../../utils/PlayerSettings.js';
 import { i18n } from '../../utils/i18n.js';
@@ -44,10 +44,12 @@ export default class PlaybackInfo extends BaseMenu {
         }
     }
 
-
-
     render() {
-        const closeIcon = ICONS.close;
+        // ====================================================================
+        // Close Icon Mapping
+        // ====================================================================
+        // We reference the unified close icon directly.
+        const closeIcon = osdIcons.close;
         const html = `
             <div id="osdPlaybackInfoOverlay" class="playback-info-overlay">
                 <div class="playback-info-header">
@@ -189,11 +191,16 @@ export default class PlaybackInfo extends BaseMenu {
             displayPlayMethod = i18n.t('Transcoding');
         }
         
+        // Fetch the user-friendly name of the current active subtitle renderer engine
+        const subtitleRenderer = this.player.getSubtitleRendererName ? this.player.getSubtitleRendererName() : i18n.t('None');
+
         html += createSection('', [
             { label: i18n.t('LabelPlayer'), value: playerType },
             { label: i18n.t('LabelPlayMethod'), value: displayPlayMethod },
             { label: i18n.t('LabelProtocol'), value: protocol },
-            { label: i18n.t('LabelStreamType'), value: streamType }
+            { label: i18n.t('LabelStreamType'), value: streamType },
+            // Display the current subtitle rendering pipeline as a dedicated field
+            { label: i18n.t('LabelSubtitleRenderer') || 'Subtitle Renderer', value: subtitleRenderer }
         ]);
 
         html += createSection(i18n.t('LabelVideoInfo'), [
@@ -232,11 +239,29 @@ export default class PlaybackInfo extends BaseMenu {
             const effectiveLimit = manualBitrate || globalBitrate;
             const limitDisplay = effectiveLimit ? (effectiveLimit / 1000000).toFixed(1) + ' Mbps' : i18n.t('Unlimited');
 
-            html += createSection(i18n.t('LabelTranscodingInfo'), [
+            // Parse and display the exact transcode reasons from the server
+            const reasonsMatch = transUrl.match(/[?&]TranscodeReasons=([^&]+)/);
+            const reasonsDisplay = reasonsMatch
+                ? decodeURIComponent(reasonsMatch[1])
+                    .split(',')
+                    .map(r => r.trim())
+                    .join(', ')
+                : null;
+
+            const transFields = [
                 { label: i18n.t('LabelVideoCodec'), value: vCodecLabel },
                 { label: i18n.t('LabelAudioCodec'), value: aCodecLabel },
                 { label: i18n.t('LabelRemoteClientBitrateLimit'), value: limitDisplay }
-            ]);
+            ];
+
+            if (reasonsDisplay) {
+                transFields.push({
+                    label: i18n.t('LabelTranscodeReasons') || 'Transcode Reason',
+                    value: reasonsDisplay
+                });
+            }
+
+            html += createSection(i18n.t('LabelTranscodingInfo'), transFields);
         }
 
         if (mediaSource) {

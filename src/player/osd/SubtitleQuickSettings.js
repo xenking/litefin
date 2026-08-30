@@ -15,8 +15,8 @@ import { platformInfo } from '../../utils/PlatformInfo.js';
  * - Synchronization with global PlayerSettings.
  */
 export default class SubtitleQuickSettings extends BaseMenu {
-    constructor( osdController ) {
-        super( osdController );
+    constructor(osdController) {
+        super(osdController);
         this.isModal = true;
         this.focusIndex = 0;
         this.items = [];
@@ -29,28 +29,28 @@ export default class SubtitleQuickSettings extends BaseMenu {
 
         // Prevent immediate key handling (e.g. the Enter key that opened the menu)
         this.inputBlocked = true;
-        setTimeout( () => {
+        setTimeout(() => {
             this.inputBlocked = false;
-        }, 300 );
+        }, 300);
     }
 
     render() {
-        if ( !this.$el ) {
-            this.$el = document.createElement( 'div' );
+        if (!this.$el) {
+            this.$el = document.createElement('div');
             this.$el.className = 'track-menu-overlay subtitle-settings-overlay';
-            document.body.appendChild( this.$el );
+            document.body.appendChild(this.$el);
 
-            this.$el.addEventListener( 'click', ( e ) => {
-                if ( e.target === this.$el ) {
+            this.$el.addEventListener('click', (e) => {
+                if (e.target === this.$el) {
                     this.osd.closeMenu();
                 }
-            } );
+            });
         }
 
         // Generate items list based on current settings
         this._buildItems();
 
-        const itemsHtml = this.items.map( ( item, i ) => this._renderItem( item, i ) ).join( '' );
+        const itemsHtml = this.items.map((item, i) => this._renderItem(item, i)).join('');
 
         this.$el.innerHTML = `
             <div class="track-menu subtitle-settings-menu">
@@ -68,16 +68,19 @@ export default class SubtitleQuickSettings extends BaseMenu {
     }
 
     _buildItems() {
-        const verticalPos = PlayerSettings.get( 'subtitleVerticalPosition' );
-        const bgColor = PlayerSettings.get( 'subtitleTextBackground' );
-        const shadowType = PlayerSettings.get( 'subtitleDropShadow' );
+        const verticalPos = PlayerSettings.get('subtitleVerticalPosition');
+        const bgColor = PlayerSettings.get('subtitleTextBackground');
+        const shadowType = PlayerSettings.get('subtitleDropShadow');
 
         // Check if we are currently rendering ASS subtitles
         const isASS = this.osd && this.osd.player && this.osd.player._subtitleManager && this.osd.player._subtitleManager.isASSActive();
 
+        // Master toggle for ASS style modifications (default: false)
+        const enableAssMods = PlayerSettings.get('enableAssStyleModifications') === true;
+
         // Whether the outline/shadow user overrides are enabled (default: true)
-        const overrideOutlineShadow = PlayerSettings.get( 'subtitleOverrideAssOutlineShadow' ) !== false;
-        
+        const overrideOutlineShadow = PlayerSettings.get('subtitleOverrideAssOutlineShadow') !== false;
+
         // Whether ASS fonts override is enabled (default: false)
         const overrideAssFonts = PlayerSettings.get('subtitleOverrideAssFonts') === true;
         const dialoguePositionOverride = PlayerSettings.get( 'subtitleAssDialoguePositionOverride' ) === true;
@@ -85,8 +88,8 @@ export default class SubtitleQuickSettings extends BaseMenu {
         // Check if a secondary subtitle track is active
         // osd.currentSecondarySubtitleIndex is -1 when no secondary track is selected
         const hasSecondary = this.osd && this.osd.currentSecondarySubtitleIndex !== undefined &&
-                             this.osd.currentSecondarySubtitleIndex !== -1 &&
-                             this.osd.currentSecondarySubtitleIndex !== null;
+            this.osd.currentSecondarySubtitleIndex !== -1 &&
+            this.osd.currentSecondarySubtitleIndex !== null;
 
         this.items = [
             // Position
@@ -152,6 +155,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 visible: !isASS,
                 options: [
                     { value: '', label: i18n.t(platformInfo.isWebOS ? 'DefaultWebOSSans' : 'DefaultTizenSans') },
+                    { value: 'fallback-font', label: i18n.t('JellyfinFallbackFont') || 'Jellyfin Fallback Font' },
                     { value: 'poppins', label: i18n.t('ModernPoppins') },
                     { value: 'noto-arabic', label: i18n.t('ArabicNotoSans') },
                     { value: 'typewriter', label: i18n.t('Typewriter') },
@@ -185,7 +189,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
             },
 
             /* -------------------------------------------------------------
-               SDR Subtitle Text Color (Apple HIG Dropdown Option)
+               SDR Subtitle Text Color
                Allows setting the text color when viewing SDR content.
                ------------------------------------------------------------- */
             {
@@ -207,7 +211,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
             },
 
             /* -------------------------------------------------------------
-               HDR Subtitle Text Color (Apple HIG Dropdown Option)
+               HDR Subtitle Text Color
                Allows setting a dedicated text color when viewing HDR content.
                ------------------------------------------------------------- */
             {
@@ -227,9 +231,9 @@ export default class SubtitleQuickSettings extends BaseMenu {
                     { value: '#0000ff', label: i18n.t('SubtitleBlue') }
                 ]
             },
-            
+
             /* -------------------------------------------------------------
-               SDR Subtitle Opacity Slider (Apple HIG Elegant Layout)
+               SDR Subtitle Opacity Slider
                Allows precise opacity adjustments when viewing standard range media.
                ------------------------------------------------------------- */
             {
@@ -246,7 +250,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
             },
 
             /* -------------------------------------------------------------
-               HDR Subtitle Opacity Slider (Apple HIG Elegant Layout)
+               HDR Subtitle Opacity Slider
                Allows separate precise control when viewing HDR media (high peak brightness).
                ------------------------------------------------------------- */
             {
@@ -302,10 +306,11 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 options: [
                     { value: 'none', label: i18n.t('None') },
                     { value: 'uniform', label: i18n.t('Uniform') },
+                    { value: 'border', label: i18n.t('Border') },
+                    { value: 'uniform_border', label: i18n.t('UniformBorders') || 'Uniform + borders' },
                     { value: 'dropshadow', label: i18n.t('DropShadow') },
                     { value: 'raised', label: i18n.t('Raised') },
-                    { value: 'depressed', label: i18n.t('Depressed') },
-                    { value: 'border', label: i18n.t('Border') }
+                    { value: 'depressed', label: i18n.t('Depressed') }
                 ]
             },
             {
@@ -315,7 +320,16 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'BorderWidth',
                 key: 'subtitleBorderWidth',
                 min: 1, max: 20, step: 1, unit: 'px',
-                visible: !isASS && shadowType === 'border'
+                visible: !isASS && (shadowType === 'border' || shadowType === 'uniform_border')
+            },
+            {
+                id: 'borderOpacity',
+                type: 'slider',
+                label: i18n.t('BorderOpacity'),
+                labelKey: 'BorderOpacity',
+                key: 'subtitleBorderOpacity',
+                min: 0, max: 100, step: 5, unit: '%',
+                visible: !isASS && (shadowType === 'border' || shadowType === 'uniform_border')
             },
             {
                 id: 'shadowColor',
@@ -343,7 +357,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'ShadowOpacity',
                 key: 'subtitleDropShadowOpacity',
                 min: 0, max: 100, step: 5, unit: '%',
-                visible: !isASS && shadowType !== 'none'
+                visible: !isASS && shadowType !== 'none' && shadowType !== 'border'
             },
             {
                 id: 'shadowBlur',
@@ -353,28 +367,50 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 key: 'subtitleDropShadowBlur',
                 min: 0, max: 20, step: 1, unit: 'px',
                 visible: !isASS && shadowType !== 'none' && shadowType !== 'border'
-            }, 
+            },
+            // Master toggle: when OFF, all ASS style modifications are disabled
+            // and the subtitle renders with its original embedded styling.
+            {
+                id: 'enableAssStyleModifications',
+                type: 'select',
+                label: i18n.t('EnableAssStyleModifications') || 'Enable ASS Style Overrides',
+                labelKey: 'EnableAssStyleModifications',
+                key: 'enableAssStyleModifications',
+                visible: isASS,
+                options: [
+                    { value: true, label: i18n.t('On') },
+                    { value: false, label: i18n.t('Off') }
+                ]
+            },
             {
                 id: 'overrideAssFonts',
                 type: 'select',
                 label: i18n.t('OverrideAssFonts'),
                 labelKey: 'OverrideAssFonts',
                 key: 'subtitleOverrideAssFonts',
-                visible: isASS,
+                visible: isASS && enableAssMods,
                 options: [
-                    { value: true,  label: i18n.t('On') },
+                    { value: true, label: i18n.t('On') },
                     { value: false, label: i18n.t('Off') }
                 ]
             },
             {
                 id: 'fontAss',
                 type: 'select',
-                label: i18n.t('AssFontFamily'),
-                labelKey: 'AssFontFamily',
+                // Check if overrideAssFonts is active. If so, label it as ASS Format Font Family.
+                // If inactive, it acts as a Fallback Font for ASS format files.
+                label: overrideAssFonts
+                    ? (i18n.t('AssFontFamily') || 'ASS Format Font Family')
+                    : (i18n.t('FallbackFontForAssFormat') || 'Fallback Font for ASS Format'),
+                // Update the key used for localization lookup
+                labelKey: overrideAssFonts ? 'AssFontFamily' : 'FallbackFontForAssFormat',
                 key: 'subtitleFontAss',
-                visible: isASS && overrideAssFonts,
+                // Keep the font configuration selector visible whenever ASS styling is active,
+                // regardless of whether overrideAssFonts is turned on or off.
+                visible: isASS && enableAssMods,
                 options: [
-                    { value: '', label: i18n.t('AssFileDefault') },
+                    { value: '', label: i18n.t(platformInfo.isWebOS ? 'DefaultWebOSSans' : 'DefaultTizenSans') },
+                    { value: 'fallback-font', label: i18n.t('JellyfinFallbackFont') || 'Jellyfin Fallback Font' },
                     { value: 'poppins', label: i18n.t('ModernPoppins') },
                     { value: 'noto-arabic', label: i18n.t('ArabicNotoSans') },
                     { value: 'typewriter', label: i18n.t('Typewriter') },
@@ -401,7 +437,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'FontScaleAss',
                 key: 'subtitleFontScale',
                 min: 0.5, max: 3.0, step: 0.1, unit: 'x',
-                visible: isASS
+                visible: isASS && enableAssMods
             },
             {
                 id: 'dialoguePositionAss',
@@ -427,13 +463,13 @@ export default class SubtitleQuickSettings extends BaseMenu {
             {
                 id: 'overrideOutlineShadow',
                 type: 'select',
-                label: i18n.t( 'OverrideOutlineShadow' ),
+                label: i18n.t('OverrideOutlineShadow'),
                 labelKey: 'OverrideOutlineShadow',
                 key: 'subtitleOverrideAssOutlineShadow',
-                visible: isASS,
+                visible: isASS && enableAssMods,
                 options: [
-                    { value: true,  label: i18n.t( 'On' )  },
-                    { value: false, label: i18n.t( 'Off' ) }
+                    { value: true, label: i18n.t('On') },
+                    { value: false, label: i18n.t('Off') }
                 ]
             },
             {
@@ -443,7 +479,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'OutlineThicknessAss',
                 key: 'subtitleOutlineThickness',
                 min: 0.0, max: 5.0, step: 0.1, unit: '',
-                visible: isASS && overrideOutlineShadow
+                visible: isASS && enableAssMods && overrideOutlineShadow
             },
             {
                 id: 'shadowThicknessAss',
@@ -452,7 +488,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'ShadowThicknessAss',
                 key: 'subtitleShadowThickness',
                 min: 0.0, max: 5.0, step: 0.1, unit: '',
-                visible: isASS && overrideOutlineShadow
+                visible: isASS && enableAssMods && overrideOutlineShadow
             },
             {
                 id: 'lineHeightAss',
@@ -461,7 +497,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'VerticalSpacingAss',
                 key: 'subtitleLineHeight',
                 min: -50, max: 50, step: 1, unit: 'px',
-                visible: isASS
+                visible: isASS && enableAssMods
             },
             {
                 id: 'letterSpacingAss',
@@ -470,9 +506,9 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 labelKey: 'HorizontalSpacingAss',
                 key: 'subtitleLetterSpacing',
                 min: -20, max: 40, step: 0.5, unit: 'px',
-                visible: isASS
+                visible: isASS && enableAssMods
             },
- 
+
             // ================================================================
             // SECONDARY SUBTITLE SETTINGS
             // Shown only when a secondary subtitle track is active and primary
@@ -496,31 +532,31 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 key: 'secondarySubtitleSize',
                 visible: hasSecondary,
                 options: [
-                    { value: 'smaller',    label: i18n.t('Smaller') },
-                    { value: 'small',      label: i18n.t('Small') },
-                    { value: 'medium',     label: i18n.t('Medium') },
-                    { value: 'large',      label: i18n.t('Large') },
-                    { value: 'larger',     label: i18n.t('Larger') },
+                    { value: 'smaller', label: i18n.t('Smaller') },
+                    { value: 'small', label: i18n.t('Small') },
+                    { value: 'medium', label: i18n.t('Medium') },
+                    { value: 'large', label: i18n.t('Large') },
+                    { value: 'larger', label: i18n.t('Larger') },
                     { value: 'extralarge', label: i18n.t('ExtraLarge') }
                 ]
             }
         ];
 
         // Filter out invisible items
-        this.items = this.items.filter( item => item.visible !== false );
+        this.items = this.items.filter(item => item.visible !== false);
     }
 
-    _renderItem( item, index ) {
+    _renderItem(item, index) {
         const isFocused = index === this.focusIndex;
-        const value = item.type === 'slider' ? item.value ?? PlayerSettings.get( item.key ) : PlayerSettings.get( item.key );
+        const value = item.type === 'slider' ? item.value ?? PlayerSettings.get(item.key) : PlayerSettings.get(item.key);
 
         let controlHtml = '';
-        if ( item.type === 'select' ) {
-            const currentOption = item.options.find( opt => String( opt.value ) === String( value ) ) || item.options[ 0 ];
+        if (item.type === 'select') {
+            const currentOption = item.options.find(opt => String(opt.value) === String(value)) || item.options[0];
             controlHtml = `<div class="sub-setting-value">${currentOption.label}</div>`;
-        } else if ( item.type === 'slider' ) {
-            const percent = ( ( value - item.min ) / ( item.max - item.min ) ) * 100;
-            const sign = ( item.id === 'offset' && value > 0 ) ? '+' : '';
+        } else if (item.type === 'slider') {
+            const percent = ((value - item.min) / (item.max - item.min)) * 100;
+            const sign = (item.id === 'offset' && value > 0) ? '+' : '';
             controlHtml = `
                 <div class="sub-setting-slider-group">
                     <div class="osd-slider-container menu-slider">
@@ -549,14 +585,14 @@ export default class SubtitleQuickSettings extends BaseMenu {
         // Click handlers removed to prevent spurious triggers on menu open
     }
 
-    handleKey( key ) {
-        if ( this.inputBlocked ) return true;
+    handleKey(key) {
+        if (this.inputBlocked) return true;
 
         const maxIndex = this.items.length - 1;
 
-        switch ( key ) {
+        switch (key) {
             case 'up':
-                if ( this.focusIndex > 0 ) {
+                if (this.focusIndex > 0) {
                     this.focusIndex--;
                 } else {
                     this.focusIndex = maxIndex;
@@ -564,7 +600,7 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'down':
-                if ( this.focusIndex < maxIndex ) {
+                if (this.focusIndex < maxIndex) {
                     this.focusIndex++;
                 } else {
                     this.focusIndex = 0;
@@ -572,71 +608,71 @@ export default class SubtitleQuickSettings extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'left':
-                this._handleAdjust( document.documentElement.dir === 'rtl' ? 1 : -1 );
+                this._handleAdjust(document.documentElement.dir === 'rtl' ? 1 : -1);
                 return true;
             case 'right':
-                this._handleAdjust( document.documentElement.dir === 'rtl' ? -1 : 1 );
+                this._handleAdjust(document.documentElement.dir === 'rtl' ? -1 : 1);
                 return true;
             case 'enter':
-                this._handleAdjust( 1 ); // Cycling for select items
+                this._handleAdjust(1); // Cycling for select items
                 return true;
             case 'back':
                 this.hide();
-                this.osd.toggleSettings( true );
+                this.osd.toggleSettings(true);
                 return true;
         }
         return false;
     }
 
-    _handleAdjust( direction ) {
-        const item = this.items[ this.focusIndex ];
-        if ( !item ) return;
+    _handleAdjust(direction) {
+        const item = this.items[this.focusIndex];
+        if (!item) return;
 
-        if ( item.type === 'select' ) {
-            const currentValue = String( PlayerSettings.get( item.key ) );
-            const currentIndex = item.options.findIndex( opt => String( opt.value ) === currentValue );
+        if (item.type === 'select') {
+            const currentValue = String(PlayerSettings.get(item.key));
+            const currentIndex = item.options.findIndex(opt => String(opt.value) === currentValue);
             let nextIndex = currentIndex + direction;
 
-            if ( nextIndex < 0 ) nextIndex = item.options.length - 1;
-            if ( nextIndex >= item.options.length ) nextIndex = 0;
+            if (nextIndex < 0) nextIndex = item.options.length - 1;
+            if (nextIndex >= item.options.length) nextIndex = 0;
 
-            const nextOption = item.options[ nextIndex ];
-            PlayerSettings.set( item.key, nextOption.value );
+            const nextOption = item.options[nextIndex];
+            PlayerSettings.set(item.key, nextOption.value);
 
             // Special case: Vertical Position affects Custom Offset
             // Background/Shadow affect their sliders
             this.render(); // Re-render to update dynamic visibility
 
-        } else if ( item.type === 'slider' ) {
-            const currentValue = PlayerSettings.get( item.key );
-            let nextValue = currentValue + ( item.step * direction );
+        } else if (item.type === 'slider') {
+            const currentValue = PlayerSettings.get(item.key);
+            let nextValue = currentValue + (item.step * direction);
 
             // Clamp
-            nextValue = Math.max( item.min, Math.min( item.max, nextValue ) );
+            nextValue = Math.max(item.min, Math.min(item.max, nextValue));
             // Use 2 decimal places for better slider precision (e.g. 0.05 steps)
-            nextValue = Math.round( nextValue * 100 ) / 100;
+            nextValue = Math.round(nextValue * 100) / 100;
 
-            PlayerSettings.set( item.key, nextValue );
+            PlayerSettings.set(item.key, nextValue);
             this.render();
         }
 
         // Apply changes immediately (most logic is in PlayerSettings.set listeners in PlayerPage/JellyfinPlayer)
-        if ( this.player && this.player.refreshSubtitles ) {
+        if (this.player && this.player.refreshSubtitles) {
             this.player.refreshSubtitles();
         }
     }
 
     updateFocus() {
-        if ( !this.$el ) return;
-        const items = this.$el.querySelectorAll( '.track-item' );
-        items.forEach( ( opt, i ) => {
+        if (!this.$el) return;
+        const items = this.$el.querySelectorAll('.track-item');
+        items.forEach((opt, i) => {
             const isFocused = i === this.focusIndex;
-            opt.classList.toggle( 'focused', isFocused );
-            if ( isFocused ) {
+            opt.classList.toggle('focused', isFocused);
+            if (isFocused) {
                 opt.focus();
-                opt.scrollIntoView( { block: 'nearest', behavior: 'smooth' } );
+                opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
-        } );
+        });
     }
 
     /**
@@ -644,13 +680,13 @@ export default class SubtitleQuickSettings extends BaseMenu {
      * This is the CSP-Safe way to handle progress bar fills on Tizen.
      */
     _updateSliderFills() {
-        if ( !this.$el ) return;
-        const fills = this.$el.querySelectorAll( '.osd-slider-fill' );
-        fills.forEach( ( fill ) => {
-            const percent = fill.getAttribute( 'data-percent' );
-            if ( percent !== null ) {
+        if (!this.$el) return;
+        const fills = this.$el.querySelectorAll('.osd-slider-fill');
+        fills.forEach((fill) => {
+            const percent = fill.getAttribute('data-percent');
+            if (percent !== null) {
                 fill.style.width = percent + '%';
             }
-        } );
+        });
     }
 }

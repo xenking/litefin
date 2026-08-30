@@ -33,6 +33,8 @@ globalThis.requestAnimationFrame = (callback) => {
 };
 
 const noop = () => {};
+globalThis.window.addEventListener = noop;
+globalThis.window.removeEventListener = noop;
 const fakeClassList = {
     add: noop,
     remove: noop,

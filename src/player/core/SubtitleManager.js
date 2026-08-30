@@ -16,6 +16,8 @@ import { SubtitleParser } from './SubtitleParser.js';
 import { buildActiveCuePayload } from './SubtitleCueUtils.js';
 import { isSecondarySubtitleTrackRenderable } from './SubtitleTrackPolicy.js';
 import ASSRenderer from './ASSRenderer.js';
+import LibassWasmRenderer from './LibassWasmRenderer.js';
+import ASSJSRenderer from './ASSJSRenderer.js';
 import PGSRenderer from './PGSRenderer.js';
 import MediaHelper from './MediaHelper.js';
 import SubtitleStyles from '../../utils/SubtitleStyles.js';
@@ -110,6 +112,15 @@ export default class SubtitleManager {
         // checks it after every await — if it has changed, the load is aborted
         // and no zombie PGSRenderer is created.
         this._pgsLoadToken = 0;
+
+        // ====================================================================
+        // Stale-load guard for the async ASS download/rendering pipeline.
+        // Incremented every time a new load starts OR destroy() is called.
+        // Each invocation of _loadASSTrack captures the token at entry and
+        // checks it after every await — if it has changed, the load is aborted
+        // to prevent rendering subtitles for a superseded/switched track.
+        // ====================================================================
+        this._assLoadToken = 0;
 
         // Set to true by destroy() so stray callbacks can bail early.
         this._isDestroyed = false;
@@ -434,6 +445,47 @@ export default class SubtitleManager {
     }
 
     /**
+     * Determines and returns the user-facing name of the currently active subtitle rendering engine.
+     * Evaluates backend type, delivery method, and player preferences to identify the active pipeline.
+     * 
+     * @returns {string} Human-readable renderer description.
+     */
+    getSubtitleRendererName() {
+        // Return 'None' if there's no active track loaded or if delivery is explicitly disabled.
+        if (!this._primaryTrack || this._primaryDelivery === DeliveryMethod.NONE) {
+            return i18n.t('None') || 'None';
+        }
+
+        // Map the internal delivery method constant to a descriptive name.
+        switch (this._primaryDelivery) {
+            case DeliveryMethod.EMBEDDED_NATIVE: {
+                // For native playback, distinguish based on the target OS environment.
+                if (this._backendType === 'webos') {
+                    return 'WebOS Native';
+                } else if (this._backendType === 'tizen') {
+                    return 'Tizen AVPlayer Native';
+                } else {
+                    return 'HTML5 Native';
+                }
+            }
+            case DeliveryMethod.EXTERNAL_TEXT:
+                // DOM rendering of parsed text-based formats (VTT, SRT, etc.).
+                return 'DOM / Text';
+            case DeliveryMethod.ASS_CANVAS: {
+                // ASS/SSA renderer engine: return 'libjass' or 'libass-wasm' directly.
+                const preferredEngine = PlayerSettings.get('assRenderer') || 'libjass';
+                return preferredEngine;
+            }
+            case DeliveryMethod.PGS_BITMAP:
+                // Graphics/bitmap subtitle rendering engine.
+                return 'PGSRenderer';
+            default:
+                // Fallback for unexpected delivery states.
+                return i18n.t('Unknown') || 'Unknown';
+        }
+    }
+
+    /**
      * Get the current primary subtitle track.
      * @returns {Object|null} The Jellyfin subtitle stream object
      */
@@ -453,19 +505,26 @@ export default class SubtitleManager {
         // SRT/VTT track is active, triggering an unwanted overlay.
         // =================================================================
         if (this._assRenderer && this._primaryDelivery === DeliveryMethod.ASS_CANVAS) {
+            // Sync the master style modifications toggle and preferred engine
+            const enableModifications = PlayerSettings.get('enableAssStyleModifications') === true;
+            const preferredEngine = PlayerSettings.get('assRenderer') || 'libjass';
+            this._assRenderer.setStyleConfig({ enableModifications, preferredEngine });
+
             const overrideAssFonts = PlayerSettings.get('subtitleOverrideAssFonts') === true;
             let fontClass = null;
             let fontFamily = null;
 
-            if (this._hasContainerFonts && !overrideAssFonts) {
-                log.info('Using container fonts for ASS; font override toggle is OFF.');
-            } else {
+            if (overrideAssFonts) {
                 const fontId = SubtitleStyles.getCurrentFontId('subtitleFontAss');
                 if (fontId) {
                     await FontLoader.loadFont(fontId);
                 }
                 fontClass = SubtitleStyles.getFontClassName('subtitleFontAss');
                 fontFamily = SubtitleStyles.getFontFamily('subtitleFontAss');
+            } else if (this._hasContainerFonts) {
+                log.info('Using container fonts for ASS; font override toggle is OFF.');
+            } else {
+                log.info('Override OFF and no container fonts — restoring original ASS fonts.');
             }
 
             const fontScale = SubtitleStyles.getFontScale('subtitleFontAss');
@@ -559,6 +618,26 @@ export default class SubtitleManager {
     }
 
     // ========================================================================
+    // Playback State
+    // ========================================================================
+
+    /**
+     * Notify the ASS renderer that playback has resumed.
+     * Resumes CSS animations and the internal rAF loop.
+     */
+    play() {
+        if (this._assRenderer && typeof this._assRenderer.play === 'function') {
+            this._assRenderer.play();
+        }
+    }
+
+    pause() {
+        if (this._assRenderer && typeof this._assRenderer.pause === 'function') {
+            this._assRenderer.pause();
+        }
+    }
+
+    // ========================================================================
     // Cleanup
     // ========================================================================
 
@@ -573,6 +652,14 @@ export default class SubtitleManager {
         // Bump the load token so any in-progress PGS download/parse loop
         // sees a stale token and exits cleanly.
         this._pgsLoadToken++;
+
+        // ====================================================================
+        // Invalidate in-flight ASS download/processing operations on player exit.
+        // Bumping this ensures that any pending _loadASSTrack execution
+        // aborts immediately rather than attempting to update or show
+        // a renderer that is about to be cleared or replaced.
+        // ====================================================================
+        this._assLoadToken++;
 
         this._clearPrimary();
         this._clearSecondary();
@@ -702,26 +789,25 @@ export default class SubtitleManager {
     async _loadASSTrack(track) {
         if (!this._itemId || !this._mediaSourceId) return;
 
+        // ====================================================================
+        // Stale-load guard — capture the current session token at start.
+        //
+        // _loadASSTrack is a multi-step asynchronous operation. If the user
+        // exits the player, switches tracks, or changes context while loading,
+        // we must abort to prevent operations on a null or stale _assRenderer.
+        // ====================================================================
+        this._assLoadToken++;
+        const myToken = this._assLoadToken;
+
+        // ====================================================================
+        // Returns true if the loader has been superseded, destroyed, or if
+        // the selected track has changed since we started loading.
+        // ====================================================================
+        const isStale = () => this._isDestroyed || 
+                               this._assLoadToken !== myToken || 
+                               this._primaryTrack !== track;
+
         try {
-            // Lazy init renderer
-            if (!this._assRenderer) {
-                // Find video dimensions for virtual element if needed
-                let width = 1920;
-                let height = 1080;
-                const videoStream = this._mediaStreams.find(s => s.Type === 'Video');
-                if (videoStream && videoStream.Width && videoStream.Height) {
-                    width = videoStream.Width;
-                    height = videoStream.Height;
-                }
-
-                this._assRenderer = new ASSRenderer({
-                    container: this._container,
-                    video: this._videoElement,
-                    width,
-                    height
-                });
-            }
-
             // Fetch raw ASS content
             // We request the original format (no conversion to vtt)
             const url = MediaHelper.getSubtitleUrl(
@@ -734,56 +820,128 @@ export default class SubtitleManager {
             );
 
             log.debug(`Fetching ASS subtitle: ${url}`);
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             
-            const content = await response.text();
+            // ================================================================
+            // Start fetching subtitle content asynchronously
+            // ================================================================
+            const subtitleFetchPromise = fetch(url).then(async (response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.text();
+            });
 
-            await this._assRenderer.setTrack(content);
-            
-            // Apply current subtitle font override
+            // Start preloading container fonts or custom font in parallel with the subtitle fetch
             const overrideAssFonts = PlayerSettings.get('subtitleOverrideAssFonts') === true;
+            const loadContainerFontsEnabled = PlayerSettings.get('subtitleAssLoadContainerFonts') !== false;
+            let fontsPromise;
+
+            if (overrideAssFonts) {
+                // If override is enabled, load the custom override font in parallel
+                const fontId = SubtitleStyles.getCurrentFontId('subtitleFontAss');
+                fontsPromise = fontId ? FontLoader.loadFont(fontId) : Promise.resolve(false);
+            } else if (loadContainerFontsEnabled) {
+                // Otherwise, download container fonts in parallel.
+                // We pass a promise that extracts the ASS font names once the subtitle fetch finishes.
+                const assFontnamesPromise = subtitleFetchPromise.then(content => this._extractAssFontnames(content));
+                fontsPromise = FontLoader.loadContainerFonts(
+                    this._mediaAttachments,
+                    this._serverUrl,
+                    this._itemId,
+                    this._mediaSourceId,
+                    this._authToken,
+                    assFontnamesPromise
+                );
+            } else {
+                fontsPromise = Promise.resolve([]);
+            }
+
+            // ================================================================
+            // Wait for both subtitle content to be downloaded and fonts to be loaded/registered in parallel
+            // ================================================================
+            const [content, loadedFontsResult] = await Promise.all([
+                subtitleFetchPromise,
+                fontsPromise
+            ]);
+
+            // ================================================================
+            // Check if the request was superseded during network transmission or font load
+            // ================================================================
+            if (isStale()) {
+                log.info('[ASSRenderer Setup] Aborting load: session is stale after fetch & font load');
+                return;
+            }
+
+            // Select and initialize ASS subtitle rendering backend with WASM feature gating
+            const preferredEngine = PlayerSettings.get('assRenderer') || 'libjass';
+            let TargetRendererClass;
+            
+            // Check if the user selected libass-wasm as the preferred renderer
+            if (preferredEngine === 'libass-wasm') {
+                // Verify hardware/browser support for WebAssembly execution at runtime
+                if (LibassWasmRenderer.isSupported()) {
+                    TargetRendererClass = LibassWasmRenderer;
+                } else {
+                    // Fall back to libjass DOM rendering if the engine lacks WebAssembly capability
+                    log.warn('libass-wasm requested but WebAssembly is not supported on this platform; falling back to ASSRenderer (libjass)');
+                    TargetRendererClass = ASSRenderer;
+                }
+            } else if (preferredEngine === 'assjs') {
+                TargetRendererClass = ASSJSRenderer;
+            } else {
+                TargetRendererClass = ASSRenderer;
+            }
+
+            // Check if existing renderer needs to be swapped out
+            if (this._assRenderer && !(this._assRenderer instanceof TargetRendererClass)) {
+                this._assRenderer.destroy();
+                this._assRenderer = null;
+            }
+
+            if (!this._assRenderer) {
+                let width = 1920;
+                let height = 1080;
+                let videoFrameRate = 24;
+                const videoStream = this._mediaStreams.find(s => s.Type === 'Video');
+                if (videoStream && videoStream.Width && videoStream.Height) {
+                    width = videoStream.Width;
+                    height = videoStream.Height;
+                }
+                if (videoStream && videoStream.RealFrameRate) {
+                    videoFrameRate = videoStream.RealFrameRate;
+                }
+
+                try {
+                    this._assRenderer = new TargetRendererClass({
+                        container: this._container,
+                        video: this._videoElement,
+                        width,
+                        height,
+                        videoFrameRate
+                    });
+                } catch (initErr) {
+                    log.warn(`Failed to initialize ${TargetRendererClass.name}, falling back to ASSRenderer (libjass):`, initErr);
+                    TargetRendererClass = ASSRenderer;
+                    this._assRenderer = new TargetRendererClass({
+                        container: this._container,
+                        video: this._videoElement,
+                        width,
+                        height
+                    });
+                }
+            }
+
+            // Sync master style modifications toggle and engine config
+            const enableAssMods = PlayerSettings.get('enableAssStyleModifications') === true;
+            this._assRenderer.setStyleConfig({ enableModifications: enableAssMods, preferredEngine });
+
+            // Apply current subtitle font override
             let fontClass = null;
             let fontFamily = null;
 
-            // Extract the exact Fontname strings from the ASS [Styles] section.
-            // FontLoader will use these to register each attachment under the name
-            // the ASS file actually uses, guaranteeing a CSS font-family hit.
-            const assFontnames = this._extractAssFontnames(content);
-            // log.info(`[ASSRenderer Setup] Extracted ${assFontnames.size} ASS fontname(s):`, [...assFontnames]);
-            log.info(`[ASSRenderer Setup] Passing ${this._mediaAttachments.length} media attachments to FontLoader`);
-
-            // Attempt to load container fonts, giving FontLoader the ASS fontname
-            // set so it can normalize-match filenames to exact ASS Fontnames.
-            const loadedContainerFonts = await FontLoader.loadContainerFonts(
-                this._mediaAttachments,
-                this._serverUrl,
-                this._itemId,
-                this._mediaSourceId,
-                this._authToken,
-                assFontnames
-            );
-
-            log.info(`[ASSRenderer Setup] FontLoader returned ${loadedContainerFonts.length} fonts:`, loadedContainerFonts);
-
-            this._hasContainerFonts = loadedContainerFonts.length > 0;
-
-            if (this._hasContainerFonts && !overrideAssFonts) {
-                // Container fonts are registered under their real filenames via @font-face.
-                // We intentionally leave fontFamily = null here so _preProcessAssContent
-                // will NOT touch the Fontname field in any Style: line — each style keeps
-                // its original name, which libjass then resolves against the registered
-                // @font-face entries. Overriding with a single family (e.g. fonts[0])
-                // would incorrectly clobber every style with one font.
-                // log.info(`[ASSRenderer Setup] Using ${loadedContainerFonts.length} container font(s) for ASS; Fontname overrides disabled.`);
-            } else {
-                // log.info(`[ASSRenderer Setup] Using custom font override path. hasContainerFonts=${this._hasContainerFonts}, overrideAssFonts=${overrideAssFonts}`);
-                const fontId = SubtitleStyles.getCurrentFontId('subtitleFontAss');
-                if (fontId) {
-                    await FontLoader.loadFont(fontId);
-                }
+            if (overrideAssFonts) {
                 fontClass = SubtitleStyles.getFontClassName('subtitleFontAss');
                 fontFamily = SubtitleStyles.getFontFamily('subtitleFontAss');
+            } else {
+                this._hasContainerFonts = Array.isArray(loadedFontsResult) && loadedFontsResult.length > 0;
             }
 
             const fontScale = SubtitleStyles.getFontScale('subtitleFontAss');
@@ -802,11 +960,41 @@ export default class SubtitleManager {
             // Set styles, which might be null (allowing container fonts to work naturally)
             await this._assRenderer.setFontStyles(fontClass, fontFamily, fontScale, outlineThickness, shadowThickness, lineHeight, letterSpacing, bottomOffset, dialoguePositionOverride, positionOptions);
 
+            // ================================================================
+            // Check if stale after applying styles
+            // ================================================================
+            if (isStale()) {
+                log.info('[ASSRenderer Setup] Aborting load: session is stale after applying styles');
+                return;
+            }
+
+            // ================================================================
+            // Step 6: Parse the track and create the renderer with fully-loaded fonts
+            // ----------------------------------------------------------------
+            // The file is preprocessed and parsed once, instantly using the correct
+            // customizations, margins, outline sizes, and registered fonts.
+            // ================================================================
+            await this._assRenderer.setTrack(content);
+            
+            // ================================================================
+            // Check if context changed or was destroyed during track parsing
+            // ================================================================
+            if (isStale()) {
+                log.info('[ASSRenderer Setup] Aborting load: session is stale after setTrack');
+                return;
+            }
+
             this._assRenderer.show();
 
         } catch (err) {
-            const errorMsg = err ? (err.name + ': ' + err.message + '\n' + err.stack) : err;
-            log.error('Failed to load ASS track:', errorMsg);
+            // ================================================================
+            // Skip logging if the session is stale to avoid polluting logs with
+            // aborted exceptions from destroyed / closed player instances.
+            // ================================================================
+            if (!isStale()) {
+                const errorMsg = err ? (err.name + ': ' + err.message + '\n' + err.stack) : err;
+                log.error('Failed to load ASS track:', errorMsg);
+            }
         }
     }
 
@@ -1083,13 +1271,39 @@ export default class SubtitleManager {
 
             log.debug(`Fetching ${slot} subtitle (${track.Codec}): ${url}`);
 
+            // ================================================================
+            // Fetch the subtitle VTT text from server asynchronously
+            // ================================================================
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
             const text = await response.text();
+            
+            // ================================================================
+            // Guard: If the player has been destroyed, or the active track for
+            // this slot has been changed during the fetch, abort immediately.
+            // This prevents out-of-order responses from overwriting the correct cues.
+            // ================================================================
+            if (this._isDestroyed) return;
+            if (slot === 'primary' && this._primaryTrack !== track) {
+                log.info(`[SubtitleManager] Aborting cue parse for ${slot}: track has changed`);
+                return;
+            }
+            if (slot === 'secondary' && this._secondaryTrack !== track) {
+                log.info(`[SubtitleManager] Aborting cue parse for ${slot}: track has changed`);
+                return;
+            }
+
             const cues = SubtitleParser.parse(text);
+
+            // ================================================================
+            // Re-verify track validity after the CPU-heavy parsing step
+            // ================================================================
+            if (this._isDestroyed) return;
+            if (slot === 'primary' && this._primaryTrack !== track) return;
+            if (slot === 'secondary' && this._secondaryTrack !== track) return;
 
             // Store parsed cues in the correct slot
             if (slot === 'primary') {
@@ -1100,13 +1314,20 @@ export default class SubtitleManager {
 
             log.info(`Parsed ${cues.length} ${slot} subtitle cues from "${track.DisplayTitle}"`);
         } catch (err) {
-            log.error(`Failed to fetch/parse ${slot} subtitle:`, err ? (err.name + ': ' + err.message + '\n' + err.stack) : err);
+            // ================================================================
+            // Only log and clear if the track is still current for this slot.
+            // If the track changed, we don't care about errors from the stale request.
+            // ================================================================
+            const isCurrent = slot === 'primary' ? (this._primaryTrack === track) : (this._secondaryTrack === track);
+            if (!this._isDestroyed && isCurrent) {
+                log.error(`Failed to fetch/parse ${slot} subtitle:`, err ? (err.name + ': ' + err.message + '\n' + err.stack) : err);
 
-            // Clear cues on failure
-            if (slot === 'primary') {
-                this._primaryCues = [];
-            } else {
-                this._secondaryCues = [];
+                // Clear cues on failure
+                if (slot === 'primary') {
+                    this._primaryCues = [];
+                } else {
+                    this._secondaryCues = [];
+                }
             }
         }
     }
@@ -1152,7 +1373,8 @@ export default class SubtitleManager {
 
                 callback({
                     text: activePayload.text,
-                    duration: activePayload.duration
+                    duration: activePayload.duration,
+                    endTicks: Math.round((currentTimeSeconds + activePayload.duration / 1000) * 10000000)
                 });
             }
         } else {
@@ -1195,6 +1417,14 @@ export default class SubtitleManager {
         // each await — bumping here causes it to abort at the next chunk boundary
         // rather than completing and creating a renderer for the wrong track.
         this._pgsLoadToken++;
+
+        // ====================================================================
+        // Also invalidate any in-flight ASS download/processing pipeline.
+        // Bumping this ensures that any pending _loadASSTrack execution
+        // aborts immediately rather than attempting to update or show
+        // a renderer that is about to be cleared or replaced.
+        // ====================================================================
+        this._assLoadToken++;
 
         // Clear the display if something was showing
         if (wasActive) {

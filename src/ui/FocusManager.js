@@ -77,6 +77,12 @@ class FocusManager {
         // Used by components that manage their own focus (e.g. PlayerOSD)
         this._suspended = false;
 
+        // Track the current focusable index to avoid O(n) indexOf on every move
+        this._currentFocusIndex = -1;
+
+        // Pending memory update RAF handle — coalesces rapid moves into one update
+        this._pendingMemoryUpdate = false;
+
         // Delegated utilities (extracted from this God Object)
         this._spatial = spatialNavigator;
         this._scroll = scrollController;
@@ -147,9 +153,10 @@ class FocusManager {
 
         // Track focus changes globally
         document.addEventListener('focusin', (e) => {
+            // Ignore focus transitions only while the splash screen is active or
+            // the active page still owns a loading overlay.
             const isPageLoading =
                 document.body.classList.contains('app-splash-active') ||
-                document.querySelector('.page.loading') ||
                 document.querySelector('.page.loading .page-loading');
 
             if (isPageLoading) {
@@ -192,10 +199,22 @@ class FocusManager {
                 )
                     return;
 
-                // Threshold to prevent accidental jitter moves (Magic Remotes are sensitive)
-                if (Math.abs(e.deltaY) < 30) return;
+                // Normalize deltaY based on deltaMode for cross-platform compatibility.
+                // webOS Magic Remote reports wheel events in DOM_DELTA_LINE (deltaMode=1)
+                // where a single tick is deltaY=1-3, which would be swallowed by a
+                // raw pixel threshold. Convert all modes to approximate pixels:
+                //   - DOM_DELTA_PIXEL (0): already pixels
+                //   - DOM_DELTA_LINE  (1): multiply by 20px per line
+                //   - DOM_DELTA_PAGE  (2): multiply by viewport height
+                let deltaY = e.deltaY;
+                const dm = e.deltaMode || 0;
+                if (dm === 1) deltaY *= 20;
+                else if (dm === 2) deltaY *= window.innerHeight;
 
-                const direction = e.deltaY > 0 ? 'down' : 'up';
+                // Threshold to prevent accidental jitter moves (Magic Remotes are sensitive)
+                if (Math.abs(deltaY) < 30) return;
+
+                const direction = deltaY > 0 ? 'down' : 'up';
                 this._handleKey(direction);
             },
             { passive: true }
@@ -261,6 +280,8 @@ class FocusManager {
             }
         }
 
+        // Cancel any pending deferred memory update — we write synchronously here
+        this._pendingMemoryUpdate = false;
         this._updateFocusMemory();
     }
 
@@ -363,7 +384,11 @@ class FocusManager {
             // Example: '#sidebar-home' to always land on the Home button.
             defaultFocusSelector: options.defaultFocusSelector || null,
             // Custom selector
-            selector: options.selector || FOCUSABLE_SELECTOR
+            selector: options.selector || FOCUSABLE_SELECTOR,
+            // Column count for mathematical grid navigation — when set alongside
+            // orientation: 'grid', _move() uses index math instead of SpatialNavigator
+            // to compute the next focusable, eliminating getBoundingClientRect loops.
+            columns: options.columns || null
         };
 
         this._sections.set(name, config);
@@ -536,6 +561,14 @@ class FocusManager {
         }
     }
 
+    clearMemory(sectionName) {
+        if (sectionName) {
+            this._focusMemory.delete(sectionName);
+        } else {
+            this._focusMemory.clear();
+        }
+    }
+
     /**
      * Core movement logic
      * @param {string} direction
@@ -570,7 +603,9 @@ class FocusManager {
         }
 
         const currentIndex = focusables.indexOf(this._focusedElement);
+        this._currentFocusIndex = currentIndex;
         let nextElement = null;
+        let nextIndex = -1;
 
         // 1. Handling strict orientations
         if (config.orientation === 'horizontal') {
@@ -582,18 +617,87 @@ class FocusManager {
             }
 
             if (logicalDirection === 'left') {
-                if (currentIndex > 0) nextElement = focusables[currentIndex - 1];
+                if (currentIndex > 0) {
+                    nextElement = focusables[currentIndex - 1];
+                    nextIndex = currentIndex - 1;
+                }
             } else if (logicalDirection === 'right') {
-                if (currentIndex < focusables.length - 1) nextElement = focusables[currentIndex + 1];
+                if (currentIndex < focusables.length - 1) {
+                    nextElement = focusables[currentIndex + 1];
+                    nextIndex = currentIndex + 1;
+                }
             }
         } else if (config.orientation === 'vertical') {
             if (direction === 'up') {
-                if (currentIndex > 0) nextElement = focusables[currentIndex - 1];
+                if (currentIndex > 0) {
+                    nextElement = focusables[currentIndex - 1];
+                    nextIndex = currentIndex - 1;
+                }
             } else if (direction === 'down') {
-                if (currentIndex < focusables.length - 1) nextElement = focusables[currentIndex + 1];
+                if (currentIndex < focusables.length - 1) {
+                    nextElement = focusables[currentIndex + 1];
+                    nextIndex = currentIndex + 1;
+                }
+            }
+        } else if (config.orientation === 'grid' && config.columns) {
+            // ================================================================
+            // PURE MATHEMATICAL GRID NAVIGATION
+            // ================================================================
+            // When columns are explicitly defined, we compute the next focusable
+            // index purely using index math. This completely bypasses calling
+            // SpatialNavigator.findNext(), avoiding its layout-thrashing loops
+            // (calling getBoundingClientRect() on 300+ elements per keypress).
+            // ================================================================
+            const columns = config.columns;
+            const isRtl = document.documentElement.dir === 'rtl';
+
+            // Map visual directions to logical layout directions
+            let logicalDirection = direction;
+            if (isRtl) {
+                if (direction === 'left') logicalDirection = 'right';
+                else if (direction === 'right') logicalDirection = 'left';
+            }
+
+            if (logicalDirection === 'left') {
+                // Navigate left only if not at the start of a grid row
+                if (currentIndex % columns !== 0 && currentIndex > 0) {
+                    nextElement = focusables[currentIndex - 1];
+                    nextIndex = currentIndex - 1;
+                }
+            } else if (logicalDirection === 'right') {
+                // Navigate right only if not at the end of a grid row
+                if ((currentIndex + 1) % columns !== 0 && currentIndex < focusables.length - 1) {
+                    nextElement = focusables[currentIndex + 1];
+                    nextIndex = currentIndex + 1;
+                }
+            } else if (direction === 'up') {
+                // Navigate up by jumping back one full row length
+                if (currentIndex >= columns) {
+                    nextElement = focusables[currentIndex - columns];
+                    nextIndex = currentIndex - columns;
+                }
+            } else if (direction === 'down') {
+                // Navigate down by jumping forward one full row length
+                if (currentIndex + columns < focusables.length) {
+                    nextElement = focusables[currentIndex + columns];
+                    nextIndex = currentIndex + columns;
+                } else {
+                    // Handover to last row's end item if columns are partially filled
+                    const lastRowStart = Math.floor((focusables.length - 1) / columns) * columns;
+                    const currentRow = Math.floor(currentIndex / columns);
+                    const targetRow = currentRow + 1;
+
+                    if (targetRow * columns < focusables.length || lastRowStart > currentIndex) {
+                        const lastElementIndex = focusables.length - 1;
+                        if (Math.floor(lastElementIndex / columns) === targetRow) {
+                            nextElement = focusables[lastElementIndex];
+                            nextIndex = lastElementIndex;
+                        }
+                    }
+                }
             }
         } else {
-            // 'grid' or default — delegate to SpatialNavigator
+            // 'grid' or default fallback — delegate to SpatialNavigator
             nextElement = this._spatial.findNext(this._focusedElement, focusables, direction);
         }
 
@@ -608,7 +712,13 @@ class FocusManager {
             // ----------------------------------------------------------------
             const isRapidNav = this._rapidMoveStreak >= RAPID_MOVE_STREAK_REQUIRED;
 
-            this.focusElement(nextElement, { instantScroll: isRapidNav });
+            const moveOpts = { instantScroll: isRapidNav, sectionName: this._activeSection };
+            if (nextIndex >= 0) moveOpts.focusIndex = nextIndex;
+            // Horizontal moves in a grid stay on the same row — skip vertical scroll recalculation
+            if (config.orientation === 'grid' && config.columns && (direction === 'left' || direction === 'right')) {
+                moveOpts.skipVerticalScroll = true;
+            }
+            this.focusElement(nextElement, moveOpts);
             return;
         }
 
@@ -683,6 +793,9 @@ class FocusManager {
             searchDepth++;
         }
 
+        // Flush pending memory update before leaving section
+        this._flushMemoryUpdate();
+
         if (nextSection && this._sections.has(nextSection)) {
             const originElement = this._focusedElement; // Capture for spatial handover
 
@@ -717,7 +830,14 @@ class FocusManager {
             // No section to navigate to (at top of page)
             // Still scroll to top to show full backdrop as visual feedback
             const scrollContainer = this._scroll.getScrollContainer(this._focusedElement);
-            if (scrollContainer && scrollContainer.scrollTop > 0) {
+            // ================================================================
+            // GPU SCROLL COMPATIBLE VERTICAL SCROLL CHECK
+            // ================================================================
+            // Direct reads of scrollContainer.scrollTop return 0 in GPU scroll mode.
+            // Using getVerticalScroll ensures we correctly identify if the page
+            // is scrolled down before animating back to top.
+            // ================================================================
+            if (scrollContainer && this._scroll.getVerticalScroll(scrollContainer) > 0) {
                 this._scroll.smoothScrollTo(scrollContainer, 0);
             }
         }
@@ -749,8 +869,9 @@ class FocusManager {
             this._focusedElement.blur(); // Clear native :focus styling on Tizen
         }
 
-        // Get section config for custom scroll offsets
-        const sectionName = this.getSectionForElement(element);
+        // PERFORMANCE: Use provided sectionName hint to skip DOM closest() traversal.
+        // _move() always knows the section and passes it via options.
+        const sectionName = options.sectionName || this.getSectionForElement(element);
         const config = sectionName ? this._sections.get(sectionName) : null;
 
         // Auto-switch active section if:
@@ -791,20 +912,41 @@ class FocusManager {
         // FocusManager handles all input internally via EventBus.
         // this._focusedElement.focus({ preventScroll: true });
 
-        this._updateFocusMemory();
+        if (options.focusIndex !== undefined && options.focusIndex >= 0) {
+            this._currentFocusIndex = options.focusIndex;
+        }
+
+        // Defer memory update to RAF to batch rapid key moves
+        this._scheduleMemoryUpdate();
         eventBus.emit('focus:changed', element);
     }
 
+    _scheduleMemoryUpdate() {
+        if (this._pendingMemoryUpdate) return;
+        this._pendingMemoryUpdate = true;
+        requestAnimationFrame(() => {
+            this._pendingMemoryUpdate = false;
+            this._updateFocusMemory();
+        });
+    }
+
+    _flushMemoryUpdate() {
+        if (this._pendingMemoryUpdate) {
+            this._pendingMemoryUpdate = false;
+            this._updateFocusMemory();
+        }
+    }
+
     _updateFocusMemory() {
+        if (storage.getItem('pref:disableFocusRestore') === 'true') return;
         if (!this._activeSection || !this._focusedElement) return;
         const config = this._sections.get(this._activeSection);
+        if (!config) return;
 
         if (config.container.contains(this._focusedElement)) {
-            const focusables = this._getFocusables(this._activeSection);
-            const index = focusables.indexOf(this._focusedElement);
             this._focusMemory.set(this._activeSection, {
                 element: this._focusedElement,
-                index,
+                index: this._currentFocusIndex,
                 virtualIndex:
                     this._focusedElement.dataset.virtualIndex !== undefined
                         ? parseInt(this._focusedElement.dataset.virtualIndex, 10)
@@ -817,6 +959,14 @@ class FocusManager {
         const config = this._sections.get(sectionName);
         if (!config) return;
 
+        if (storage.getItem('pref:disableFocusRestore') === 'true') {
+            const focusables = this._getFocusables(sectionName);
+            if (focusables.length) {
+                this.focusElement(focusables[0], { instantScroll: !!options.instantScroll });
+            }
+            return;
+        }
+
         const focusables = this._getFocusables(sectionName);
         const memory = this._focusMemory.get(sectionName);
 
@@ -828,13 +978,21 @@ class FocusManager {
             return;
         }
 
-        // 0. Default Focus Selector (config-driven, replaces hardcoded section checks)
-        // If a section specifies defaultFocusSelector, always focus that element on entry.
-        // Example: sidebar uses '#sidebar-home' to always land on Home.
         if (config.defaultFocusSelector) {
             const defaultEl = focusables.find((el) => el.matches(config.defaultFocusSelector));
             const target = defaultEl || focusables[0];
-            this.focusElement(target, { skipScroll: true });
+            // ================================================================
+            // FIX: Honor Scroll Configuration for Default Focus Selection
+            // ================================================================
+            // Previously, this forced { skipScroll: true }, which disabled all
+            // scrolling for elements focused via defaultFocusSelector. This caused
+            // sections like the action buttons on the Details page (which use a
+            // default selector to target Resume/Play on entry) to never scroll
+            // the page back to the top when entered from below.
+            // We now correctly forward instantScroll and preserve the ability to
+            // scroll the target into view.
+            // ================================================================
+            this.focusElement(target, { instantScroll: !!options.instantScroll });
             return;
         }
 
@@ -909,6 +1067,12 @@ class FocusManager {
         if (this._focusedElement) {
             // Dispatch click
             this._focusedElement.click();
+
+            // Native focus is required to invoke the TV OS virtual keyboard (IME) on text fields
+            if (this._focusedElement.tagName === 'INPUT' || this._focusedElement.tagName === 'TEXTAREA') {
+                this._focusedElement.focus();
+            }
+
             eventBus.emit('focus:activated', this._focusedElement);
         }
     }

@@ -63,6 +63,8 @@ function getStatus() {
         'FontBaloo',
         'FontAtkinson',
         'FontOpenDyslexic',
+        'FontPoiretOne',
+        'FontZenKakuGothicNew',
         'HD',
         'Option4K',
         'Path',

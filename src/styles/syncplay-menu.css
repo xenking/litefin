@@ -35,7 +35,7 @@
     -webkit-justify-content: center;
     justify-content: center;
     /* Darker backdrop — backdrop-filter is unsupported on Chrome 69 */
-    background: rgba(0, 0, 0, 0.8);
+    background: rgba(var(--jf-overlay-bg-rgb, 0, 0, 0), var(--osd-track-menu-bg-opacity, 0.85));
     opacity: 0;
     -webkit-transition: opacity 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
     transition: opacity 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
@@ -368,3 +368,28 @@ html[data-layout-tier="ultra-legacy"] .syncplay-btn {
     color: var(--jf-text-secondary, rgba(255, 255, 255, 0.5));
     font-size: 15px;
 }
+
+/* ============================================================================
+   SyncPlay Icon Filled/Outline Display Toggle
+   ============================================================================ */
+
+/* Hide filled SVG by default inside syncplay-icon */
+.syncplay-icon .icon-filled {
+    display: none !important;
+}
+
+/* Show outline SVG by default inside syncplay-icon */
+.syncplay-icon .icon-outline {
+    display: inline-block !important;
+}
+
+/* When the group is active, show the filled SVG instead */
+.syncplay-icon.active .icon-filled {
+    display: inline-block !important;
+}
+
+/* When the group is active, hide the outline SVG */
+.syncplay-icon.active .icon-outline {
+    display: none !important;
+}
+
