@@ -8,12 +8,185 @@
  */
 
 import { api } from '../api/index.js';
+import { escapeHtml } from './Utils.js';
 import { imageService } from './ImageService.js';
 import { i18n } from './i18n.js';
 import { storage } from './StorageService.js';
 import { shouldShowScore } from './visibility.js';
+import { detailsIcons } from './Icons.js';
+import { platformInfo } from './PlatformInfo.js';
 
 class CardRenderer {
+    /**
+     * HTML output cache: keyed by item.Id, scoped to the current render context.
+     * Invalidated automatically when options change or clearCache() is called.
+     * Prevents redundant image URL resolution, BlurHash lookup, quality badge
+     * computation, and string building when cards are re-rendered for the same
+     * data (e.g. progressive grid chunk append/prepend after focus changes).
+     */
+    static _htmlCache = new Map();
+    static _htmlCacheKey = null;
+
+    /**
+     * Clear the HTML output cache. Call this when items, viewMode, columns,
+     * or any other rendering option changes.
+     */
+    static clearCache() {
+        this._htmlCache.clear();
+        this._htmlCacheKey = null;
+    }
+
+    /**
+     * Generate Played (Check Mark) Badge HTML if item is played
+     * @param {Object} item
+     * @returns {string} HTML string
+     */
+    static getPlayedBadgeHtml(item) {
+        if (!item || !item.UserData || !item.UserData.Played) return '';
+        const isMusic =
+            item.Type === 'MusicArtist' ||
+            item.Type === 'Artist' ||
+            item.Type === 'MusicAlbum' ||
+            item.Type === 'Audio';
+        if (isMusic) return '';
+        return `
+            <div class="played-badge">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+            </div>
+        `;
+    }
+
+    /**
+     * Generate Quality (Resolution/HDR) Badge HTML
+     * @param {Object} item
+     * @returns {string} HTML string
+     */
+    static getQualityBadgeHtml(item) {
+        if (!item) return '';
+        const showQualityBadges = storage.getItem('pref:showQualityBadges') === 'true';
+        if (!showQualityBadges) return '';
+
+        let width = item.Width;
+        let height = item.Height;
+
+        // Dynamic range flags for metadata inspection
+        let isHdr = false;
+        let isHdr10Plus = false;
+        let isDovi = false;
+
+        /*
+         * Extract video stream attributes from item and media-source metadata.
+         * We inspect VideoRange, VideoRangeType, Profile, Title, and Codec strings.
+         */
+        const source = item.MediaSources?.[0];
+        if (source?.Width) width = source.Width;
+        if (source?.Height) height = source.Height;
+
+        const sourceVideoStream = source?.MediaStreams?.find((s) => s.Type === 'Video');
+        const itemVideoStream = item.MediaStreams?.find((s) => s.Type === 'Video');
+        if (sourceVideoStream?.Width) width = sourceVideoStream.Width;
+        if (sourceVideoStream?.Height) height = sourceVideoStream.Height;
+        if (itemVideoStream?.Width) width = itemVideoStream.Width;
+        if (itemVideoStream?.Height) height = itemVideoStream.Height;
+
+        if (sourceVideoStream || itemVideoStream || item.VideoRange || item.VideoRangeType) {
+            const itemRange = `${item.VideoRange || ''} ${item.VideoRangeType || ''}`;
+            const sourceVideoRange = sourceVideoStream?.VideoRange || '';
+            const sourceVideoRangeType = sourceVideoStream?.VideoRangeType || '';
+            const sourceProfile = sourceVideoStream?.Profile || '';
+            const sourceTitle = sourceVideoStream?.Title || sourceVideoStream?.DisplayTitle || '';
+            const sourceCodec = sourceVideoStream?.Codec || '';
+            const itemVideoRange = itemVideoStream?.VideoRange || '';
+            const itemVideoRangeType = itemVideoStream?.VideoRangeType || '';
+            const itemProfile = itemVideoStream?.Profile || '';
+            const itemTitle = itemVideoStream?.Title || itemVideoStream?.DisplayTitle || '';
+            const itemCodec = itemVideoStream?.Codec || '';
+            const checkString = `${itemRange} ${sourceVideoRange} ${sourceVideoRangeType} ${sourceProfile} ${sourceTitle} ${sourceCodec} ${itemVideoRange} ${itemVideoRangeType} ${itemProfile} ${itemTitle} ${itemCodec}`.toLowerCase();
+
+            if (
+                checkString.includes('hdr10plus') ||
+                checkString.includes('hdr10+') ||
+                checkString.includes('hdr10p') ||
+                checkString.includes('doviwithhdr10plus') ||
+                checkString.includes('doviwithelhdr10plus')
+            ) {
+                isHdr10Plus = true;
+            }
+
+            if (checkString.includes('hdr')) {
+                isHdr = true;
+            }
+
+            if (
+                checkString.includes('dovi') ||
+                checkString.includes('dolby vision') ||
+                sourceCodec.toLowerCase().startsWith('dv') ||
+                itemCodec.toLowerCase().startsWith('dv')
+            ) {
+                isDovi = true;
+            }
+        }
+
+        if (width || height) {
+            let resolutionLabel = '';
+            const maxDim = Math.max(width || 0, height || 0);
+            const minDim = Math.min(width || 0, height || 0);
+
+            /*
+             * Classify resolution using relaxed boundaries to account for widescreen cropping
+             */
+            if (maxDim >= 3000 || minDim >= 2000) {
+                resolutionLabel = '4K';
+            } else if (maxDim >= 1600 || minDim >= 900) {
+                resolutionLabel = '1080p';
+            } else if (maxDim >= 1000 || minDim >= 600) {
+                resolutionLabel = '720p';
+            } else if (maxDim > 0) {
+                resolutionLabel = 'SD';
+            }
+
+            /*
+             * Determine dynamic range label prioritization based on target OS platform:
+             *
+             * On Samsung Tizen TVs, Dolby Vision hardware decoders do not exist.
+             * Tizen AVPlay renders the fallback layer (HDR10 or HDR10+) natively.
+             * Therefore, when running on Tizen (platformInfo.isTizen), we prioritize HDR10+ / HDR
+             * over DV so the quality badge accurately reflects what the TV actually renders.
+             *
+             * On non-Tizen platforms (e.g. webOS / Web), DV is prioritized as the top tier.
+             */
+            let rangeLabel = '';
+            if (platformInfo.isTizen) {
+                if (isHdr10Plus) {
+                    rangeLabel = 'HDR10+';
+                } else if (isHdr) {
+                    rangeLabel = 'HDR';
+                } else if (isDovi) {
+                    rangeLabel = 'DV';
+                }
+            } else {
+                if (isDovi) {
+                    rangeLabel = 'DV';
+                } else if (isHdr10Plus) {
+                    rangeLabel = 'HDR10+';
+                } else if (isHdr) {
+                    rangeLabel = 'HDR';
+                }
+            }
+
+            if (rangeLabel) {
+                resolutionLabel = resolutionLabel ? `${resolutionLabel} ${rangeLabel}` : rangeLabel;
+            }
+
+            if (resolutionLabel) {
+                return `<div class="quality-badge">${resolutionLabel}</div>`;
+            }
+        }
+        return '';
+    }
+
     /**
      * Create HTML string for a media card
      * @param {Object} item - The Jellyfin item object
@@ -23,22 +196,45 @@ class CardRenderer {
      * @returns {string} HTML string
      */
     static createCardHtml(item, options = {}) {
-        const { isLandscape = false, type = 'poster', contextType = null, isGrid = false } = options;
+        const { isLandscape = false, type = 'poster', contextType = null, isGrid = false, cardWidth = null } = options;
+
+        // ------------------------------------------------------------------
+        // HTML OUTPUT CACHE
+        // ------------------------------------------------------------------
+        // If the rendering context (options that affect HTML output) has not
+        // changed, return the cached HTML for this item — skipping image URL
+        // resolution, BlurHash lookup, quality badge iteration, and string
+        // building. Cache key incorporates every option that changes output.
+        // ------------------------------------------------------------------
+        const cacheKey = `${isLandscape}|${type}|${contextType}|${isGrid}|${cardWidth}|${options.showMeta}`;
+        if (CardRenderer._htmlCacheKey !== cacheKey) {
+            CardRenderer._htmlCache.clear();
+            CardRenderer._htmlCacheKey = cacheKey;
+        }
+        const itemId = item.Id;
+        const cached = CardRenderer._htmlCache.get(itemId);
+        if (cached !== undefined) return cached;
+
         const isModernRowsEnabled = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
         const isModern = isModernRowsEnabled && !isGrid;
 
         let imageUrl = '';
         let imageInnerHtml = '';
-        const itemId = item.Id;
 
-        // Spy on getImageUrl to capture the exact image type and tag resolved during execution
+        // Captures which image type+tag was resolved for BlurHash lookup
         let resolvedImageType = '';
         let resolvedImageTag = '';
-        const originalGetImageUrl = api.getImageUrl;
-        api.getImageUrl = function (id, imageType, options = {}) {
+
+        const _imgUrl = (id, imageType, getUrlOptions = {}) => {
             resolvedImageType = imageType;
-            resolvedImageTag = options.tag || '';
-            return originalGetImageUrl.call(api, id, imageType, options);
+            resolvedImageTag = getUrlOptions.tag || '';
+            if (cardWidth) {
+                const scaleFactor = imageService.getPresetScale();
+                if (scaleFactor !== null) {
+                    getUrlOptions = { ...getUrlOptions, maxWidth: Math.round(cardWidth * scaleFactor) };
+                }
+            }
+            return api.getImageUrl(id, imageType, getUrlOptions);
         };
 
         // --- 1. Image Resolution Strategy ---
@@ -51,7 +247,7 @@ class CardRenderer {
 
             if (primaryTag || (itemId && isArtist)) {
                 const params = imageService.getParams('poster', contextType); // People usually have poster-like images
-                imageUrl = api.getImageUrl(itemId, 'Primary', {
+                imageUrl = _imgUrl(itemId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     ...(primaryTag ? { tag: primaryTag } : {})
@@ -61,21 +257,21 @@ class CardRenderer {
             // Force Episode Primary Image (for Person Page grid)
             const params = imageService.getParams('card-backdrop', contextType);
             if (item.ImageTags?.Primary) {
-                imageUrl = api.getImageUrl(itemId, 'Primary', {
+                imageUrl = _imgUrl(itemId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Primary
                 });
             } else if (item.ParentThumbItemId && item.ParentThumbImageTag) {
                 // Fallback to season thumb
-                imageUrl = api.getImageUrl(item.ParentThumbItemId, 'Thumb', {
+                imageUrl = _imgUrl(item.ParentThumbItemId, 'Thumb', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ParentThumbImageTag
                 });
             } else if (item.SeriesThumbImageTag && item.SeriesId) {
                 // Fallback to series thumb
-                imageUrl = api.getImageUrl(item.SeriesId, 'Thumb', {
+                imageUrl = _imgUrl(item.SeriesId, 'Thumb', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.SeriesThumbImageTag
@@ -83,7 +279,7 @@ class CardRenderer {
             } else if (item.SeriesId) {
                 // Final Fallback: Series Primary if nothing else (only if SeriesId exists)
                 const seriesParams = imageService.getParams('poster', contextType); // Series primary is usually a poster
-                imageUrl = api.getImageUrl(item.SeriesId, 'Primary', {
+                imageUrl = _imgUrl(item.SeriesId, 'Primary', {
                     maxWidth: seriesParams.maxWidth,
                     quality: seriesParams.quality
                 });
@@ -94,26 +290,26 @@ class CardRenderer {
 
             // Priority: Banner -> Backdrop -> Thumb -> Primary
             if (item.ImageTags && item.ImageTags.Banner) {
-                imageUrl = api.getImageUrl(itemId, 'Banner', {
+                imageUrl = _imgUrl(itemId, 'Banner', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Banner
                 });
             } else if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-                imageUrl = api.getImageUrl(itemId, 'Backdrop', {
+                imageUrl = _imgUrl(itemId, 'Backdrop', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.BackdropImageTags[0]
                 });
             } else if (item.ImageTags && item.ImageTags.Thumb) {
-                imageUrl = api.getImageUrl(itemId, 'Thumb', {
+                imageUrl = _imgUrl(itemId, 'Thumb', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Thumb
                 });
             } else if (item.ImageTags && item.ImageTags.Primary) {
                 // Last Resort: Poster (will be object-fit: cover in CSS to fill gaps)
-                imageUrl = api.getImageUrl(itemId, 'Primary', {
+                imageUrl = _imgUrl(itemId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Primary
@@ -137,36 +333,36 @@ class CardRenderer {
                 // Episodes: Primary (Episode Thumb) -> Series Thumb -> Parent Thumb -> Backdrop
                 // If spoiler free, skip Primary logic unless nothing else exists
                 if (!isSpoilerFree && item.ImageTags && item.ImageTags.Primary) {
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
                     });
                 } else if (item.SeriesThumbImageTag && item.SeriesId) {
-                    imageUrl = api.getImageUrl(item.SeriesId, 'Thumb', {
+                    imageUrl = _imgUrl(item.SeriesId, 'Thumb', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.SeriesThumbImageTag
                     });
                 } else if (item.ParentThumbItemId && item.ParentThumbImageTag) {
-                    imageUrl = api.getImageUrl(item.ParentThumbItemId, 'Thumb', {
+                    imageUrl = _imgUrl(item.ParentThumbItemId, 'Thumb', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ParentThumbImageTag
                     });
                 } else if (item.ParentBackdropItemId) {
-                    imageUrl = api.getImageUrl(item.ParentBackdropItemId, 'Backdrop', {
+                    imageUrl = _imgUrl(item.ParentBackdropItemId, 'Backdrop', {
                         maxWidth: params.maxWidth,
                         quality: params.quality
                     });
                 } else if (item.SeriesId) {
-                    imageUrl = api.getImageUrl(item.SeriesId, 'Backdrop', {
+                    imageUrl = _imgUrl(item.SeriesId, 'Backdrop', {
                         maxWidth: params.maxWidth,
                         quality: params.quality
                     });
                 } else if (isSpoilerFree && item.ImageTags && item.ImageTags.Primary) {
                     // Fallback to primary if forced but nothing else found
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
@@ -179,19 +375,19 @@ class CardRenderer {
                 }
                 // Libraries: Primary -> Thumb -> Backdrop
                 else if (item.ImageTags?.Primary) {
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
                     });
                 } else if (item.ImageTags?.Thumb) {
-                    imageUrl = api.getImageUrl(itemId, 'Thumb', {
+                    imageUrl = _imgUrl(itemId, 'Thumb', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Thumb
                     });
                 } else if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-                    imageUrl = api.getImageUrl(itemId, 'Backdrop', {
+                    imageUrl = _imgUrl(itemId, 'Backdrop', {
                         maxWidth: params.maxWidth,
                         quality: params.quality
                     });
@@ -206,20 +402,24 @@ class CardRenderer {
                     `;
                 }
             } else {
+                // Playlist/Collection Dynamic Thumb (pre-fetched from inner items)
+                if (item._dynamicThumbUrl && (item.Type === 'Playlist' || item.Type === 'BoxSet')) {
+                    imageUrl = item._dynamicThumbUrl;
+                }
                 // Movies/Series Landscape: Thumb -> Backdrop -> Primary
-                if (item.ImageTags?.Thumb) {
-                    imageUrl = api.getImageUrl(itemId, 'Thumb', {
+                else if (item.ImageTags?.Thumb) {
+                    imageUrl = _imgUrl(itemId, 'Thumb', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Thumb
                     });
                 } else if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-                    imageUrl = api.getImageUrl(itemId, 'Backdrop', {
+                    imageUrl = _imgUrl(itemId, 'Backdrop', {
                         maxWidth: params.maxWidth,
                         quality: params.quality
                     });
                 } else if (item.ImageTags?.Primary) {
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
@@ -230,7 +430,7 @@ class CardRenderer {
             // Live TV Channel: Primary (Logo) -> Thumb
             const params = imageService.getParams('square', contextType); // Channels are usually square logos
             if (item.ImageTags && item.ImageTags.Primary) {
-                imageUrl = api.getImageUrl(itemId, 'Primary', {
+                imageUrl = _imgUrl(itemId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Primary
@@ -242,7 +442,7 @@ class CardRenderer {
                 ? imageService.getParams('card-backdrop', contextType)
                 : imageService.getParams('poster', contextType);
             if (item.ImageTags && item.ImageTags.Primary) {
-                imageUrl = api.getImageUrl(itemId, 'Primary', {
+                imageUrl = _imgUrl(itemId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     tag: item.ImageTags.Primary
@@ -250,7 +450,7 @@ class CardRenderer {
             } else if (item.ChannelPrimaryImageTag && item.ChannelId) {
                 // Use Channel Logo as fallback
                 const logoParams = imageService.getParams('square', contextType);
-                imageUrl = api.getImageUrl(item.ChannelId, 'Primary', {
+                imageUrl = _imgUrl(item.ChannelId, 'Primary', {
                     maxWidth: logoParams.maxWidth,
                     quality: logoParams.quality,
                     tag: item.ChannelPrimaryImageTag
@@ -262,20 +462,20 @@ class CardRenderer {
                 // Season: Own Primary -> Series Primary
                 const params = imageService.getParams('poster', contextType);
                 if (item.ImageTags && item.ImageTags.Primary) {
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
                     });
                 } else if (item.SeriesPrimaryImageTag) {
-                    imageUrl = api.getImageUrl(item.SeriesId, 'Primary', {
+                    imageUrl = _imgUrl(item.SeriesId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.SeriesPrimaryImageTag
                     });
                 } else if (item.SeriesId) {
                     // Fallback without tag
-                    imageUrl = api.getImageUrl(item.SeriesId, 'Primary', {
+                    imageUrl = _imgUrl(item.SeriesId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality
                     });
@@ -289,27 +489,27 @@ class CardRenderer {
                 if (!preferEpisodeImages && item.Type === 'Episode' && item.SeriesId) {
                     // Prefer Series Primary/Thumb for Resume episodes to avoid spoilers
                     if (item.SeriesPrimaryImageTag) {
-                        imageUrl = api.getImageUrl(item.SeriesId, 'Primary', {
+                        imageUrl = _imgUrl(item.SeriesId, 'Primary', {
                             maxWidth: params.maxWidth,
                             quality: params.quality,
                             tag: item.SeriesPrimaryImageTag
                         });
                     } else if (item.SeriesThumbImageTag) {
-                        imageUrl = api.getImageUrl(item.SeriesId, 'Thumb', {
+                        imageUrl = _imgUrl(item.SeriesId, 'Thumb', {
                             maxWidth: params.maxWidth,
                             quality: params.quality,
                             tag: item.SeriesThumbImageTag
                         });
                     } else {
                         // Fallback
-                        imageUrl = api.getImageUrl(itemId, 'Primary', {
+                        imageUrl = _imgUrl(itemId, 'Primary', {
                             maxWidth: params.maxWidth,
                             quality: params.quality,
                             tag: item.ImageTags.Primary
                         });
                     }
                 } else {
-                    imageUrl = api.getImageUrl(itemId, 'Primary', {
+                    imageUrl = _imgUrl(itemId, 'Primary', {
                         maxWidth: params.maxWidth,
                         quality: params.quality,
                         tag: item.ImageTags.Primary
@@ -318,7 +518,7 @@ class CardRenderer {
             } else if (item.Type === 'Episode' && item.SeriesId) {
                 // Episode as Poster: Use Series Title/Poster usually, but if requested as poster
                 const params = imageService.getParams('poster', contextType);
-                imageUrl = api.getImageUrl(item.SeriesId, 'Primary', {
+                imageUrl = _imgUrl(item.SeriesId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality
                 });
@@ -347,16 +547,13 @@ class CardRenderer {
                     targetTag = item.AlbumPrimaryImageTag;
                 }
 
-                imageUrl = api.getImageUrl(targetId, 'Primary', {
+                imageUrl = _imgUrl(targetId, 'Primary', {
                     maxWidth: params.maxWidth,
                     quality: params.quality,
                     ...(targetTag ? { tag: targetTag } : {})
                 });
             }
         }
-        // Restore getImageUrl and resolve the BlurHash string for the rendered card
-        api.getImageUrl = originalGetImageUrl;
-
         // =====================================================================
         // BlurHash Resolution Strategy
         // =====================================================================
@@ -421,31 +618,20 @@ class CardRenderer {
         // It is optional and can be disabled via preferences to declutter the UI.
         let badgeHtml = '';
 
-        // Fetch the user preference (defaults to false, meaning counts are shown by default)
+        // Fetch user preferences for badges
         const hideEpisodeCounts = storage.getItem('pref:hideEpisodeCounts') === 'true';
+        const showMediaSourceCounts = storage.getItem('pref:showMediaSourceCounts') !== 'false';
 
-        // Only render the count badge if the user hasn't explicitly disabled it
+        // Only render the unplayed count badge if the user hasn't explicitly disabled it
         if (!hideEpisodeCounts && item.UserData && item.UserData.UnplayedItemCount > 0) {
             badgeHtml = `<div class="count-badge">${item.UserData.UnplayedItemCount}</div>`;
+        } else if (showMediaSourceCounts && item.MediaSourceCount > 1) {
+            // Render media source version count badge (e.g. for items with multiple versions like Movies/Episodes)
+            badgeHtml = `<div class="count-badge media-source-count-badge">${item.MediaSourceCount}</div>`;
         }
 
         // Played Badge (Check Mark)
-        let playedBadgeHtml = '';
-        const isMusic =
-            item.Type === 'MusicArtist' ||
-            item.Type === 'Artist' ||
-            item.Type === 'MusicAlbum' ||
-            item.Type === 'Audio';
-
-        if (item.UserData && item.UserData.Played && !isMusic) {
-            playedBadgeHtml = `
-                <div class="played-badge">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                </div>
-            `;
-        }
+        let playedBadgeHtml = CardRenderer.getPlayedBadgeHtml(item);
 
         // Video Badge (Center Play Icon)
         let videoBadgeHtml = '';
@@ -461,79 +647,27 @@ class CardRenderer {
 
         // Season/Episode Badge (for Series/Episodes)
         let episodeBadgeHtml = '';
+
+        // -------------------------------------------------------------
+        // Retrieve Episode & Season Badge preferences from local storage.
+        // Episode badges default to true, Season badges default to false (off).
+        // -------------------------------------------------------------
         const useEpisodeBadges = storage.getItem('pref:useEpisodeBadges') !== 'false';
+        const useSeasonBadges = storage.getItem('pref:useSeasonBadges') === 'true';
+
+        // -------------------------------------------------------------
+        // Check item type and build appropriate badge markup if allowed.
+        // -------------------------------------------------------------
         if (item.Type === 'Episode' && item.IndexNumber !== undefined && useEpisodeBadges) {
             const s = (item.ParentIndexNumber || 0).toString().padStart(2, '0');
             const e = (item.IndexNumber || 0).toString().padStart(2, '0');
             episodeBadgeHtml = `<div class="episode-badge">S${s}E${e}</div>`;
-        } else if (item.Type === 'Season' && item.IndexNumber !== undefined) {
+        } else if (item.Type === 'Season' && item.IndexNumber !== undefined && useSeasonBadges) {
             episodeBadgeHtml = `<div class="episode-badge">Season ${item.IndexNumber}</div>`;
         }
 
         // Quality Badge (Resolution/HDR)
-        let qualityBadgeHtml = '';
-        const showQualityBadges = storage.getItem('pref:showQualityBadges') === 'true';
-        if (showQualityBadges) {
-            let width = item.Width;
-            let height = item.Height;
-            let isHdr = false;
-
-            const itemVideoRange = item.VideoRange || item.VideoRangeType;
-            if (itemVideoRange && itemVideoRange.toLowerCase().includes('hdr')) {
-                isHdr = true;
-            }
-
-            if (item.MediaSources && item.MediaSources.length > 0) {
-                const source = item.MediaSources[0];
-                if (source.Width) width = source.Width;
-                if (source.Height) height = source.Height;
-                if (source.MediaStreams) {
-                    const videoStream = source.MediaStreams.find((s) => s.Type === 'Video');
-                    if (videoStream) {
-                        if (videoStream.Width) width = videoStream.Width;
-                        if (videoStream.Height) height = videoStream.Height;
-                        const videoRange = videoStream.VideoRange || videoStream.VideoRangeType;
-                        if (videoRange && videoRange.toLowerCase().includes('hdr')) {
-                            isHdr = true;
-                        }
-                    }
-                }
-            }
-
-            const itemVideoStream = item.MediaStreams?.find((s) => s.Type === 'Video');
-            if (itemVideoStream) {
-                if (itemVideoStream.Width) width = itemVideoStream.Width;
-                if (itemVideoStream.Height) height = itemVideoStream.Height;
-                const videoRange = itemVideoStream.VideoRange || itemVideoStream.VideoRangeType;
-                if (videoRange && videoRange.toLowerCase().includes('hdr')) {
-                    isHdr = true;
-                }
-            }
-
-            if (width || height) {
-                let resolutionLabel = '';
-                const maxDim = Math.max(width || 0, height || 0);
-                const minDim = Math.min(width || 0, height || 0);
-
-                if (maxDim >= 3840 || minDim >= 2160) {
-                    resolutionLabel = '4K';
-                } else if (maxDim >= 1920 || minDim >= 1080) {
-                    resolutionLabel = '1080p';
-                } else if (maxDim >= 1280 || minDim >= 720) {
-                    resolutionLabel = '720p';
-                } else if (maxDim > 0) {
-                    resolutionLabel = 'SD';
-                }
-
-                if (isHdr) {
-                    resolutionLabel = resolutionLabel ? `${resolutionLabel} HDR` : 'HDR';
-                }
-
-                if (resolutionLabel) {
-                    qualityBadgeHtml = `<div class="quality-badge">${resolutionLabel}</div>`;
-                }
-            }
-        }
+        let qualityBadgeHtml = CardRenderer.getQualityBadgeHtml(item);
 
         // --- 3. Text Generation ---
 
@@ -621,6 +755,12 @@ class CardRenderer {
             }
         }
 
+        // Title/subtitle derive from server-supplied fields (Name, SeriesName,
+        // ChannelName, CurrentProgram.Name, Role...) and land in innerHTML —
+        // escape once here, after all composition is done.
+        titleText = escapeHtml(titleText);
+        subtitleText = escapeHtml(subtitleText);
+
         // --- 3.5. List View Override ---
         // In list-view, we want the Title on the left and EVERY other piece of info
         // (Year, Role, Rating, Score) on the right. We move subtitle parts to metaHtml.
@@ -652,7 +792,7 @@ class CardRenderer {
         // Attach fallback data for LazyLoader to use on error
         const fbData = CardRenderer.getFallbackData(item.Name);
         const hideInitials = type === 'library';
-        const dataAttributes = `data-src="${imageUrl}" data-fb-name="${fbData.name}" data-fb-init="${fbData.initials}" data-fb-grad="${fbData.gradNum}" ${hideInitials ? 'data-fb-hide-initials="true"' : ''}`;
+        const dataAttributes = `data-src="${imageUrl}" data-fb-name="${escapeHtml(fbData.name)}" data-fb-init="${escapeHtml(fbData.initials)}" data-fb-grad="${fbData.gradNum}" ${hideInitials ? 'data-fb-hide-initials="true"' : ''}`;
 
         // ====================================================================
         // Expansion Eligibility Strategy
@@ -682,7 +822,7 @@ class CardRenderer {
 
             // 1. Prioritize native backdrops for the classic theatrical landscape feel.
             if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-                thumbUrl = api.getImageUrl(itemId, 'Backdrop', {
+                thumbUrl = _imgUrl(itemId, 'Backdrop', {
                     maxWidth: thumbParams.maxWidth,
                     quality: thumbParams.quality,
                     tag: item.BackdropImageTags[0]
@@ -690,7 +830,7 @@ class CardRenderer {
             }
             // 2. Fall back to parent-level backdrops (for episodes/seasons where series backdrop applies).
             else if (item.ParentBackdropImageTags && item.ParentBackdropImageTags.length > 0) {
-                thumbUrl = api.getImageUrl(item.ParentBackdropItemId || item.SeriesId, 'Backdrop', {
+                thumbUrl = _imgUrl(item.ParentBackdropItemId || item.SeriesId, 'Backdrop', {
                     maxWidth: thumbParams.maxWidth,
                     quality: thumbParams.quality,
                     tag: item.ParentBackdropImageTags[0]
@@ -698,7 +838,7 @@ class CardRenderer {
             }
             // 3. Fall back to series-level backdrops.
             else if (item.SeriesId && item.SeriesBackdropImageTags && item.SeriesBackdropImageTags.length > 0) {
-                thumbUrl = api.getImageUrl(item.SeriesId, 'Backdrop', {
+                thumbUrl = _imgUrl(item.SeriesId, 'Backdrop', {
                     maxWidth: thumbParams.maxWidth,
                     quality: thumbParams.quality,
                     tag: item.SeriesBackdropImageTags[0]
@@ -715,7 +855,7 @@ class CardRenderer {
                     targetId = item.AlbumId;
                 }
 
-                thumbUrl = api.getImageUrl(targetId, 'Primary', {
+                thumbUrl = _imgUrl(targetId, 'Primary', {
                     maxWidth: thumbParams.maxWidth,
                     quality: thumbParams.quality,
                     ...(primaryTag ? { tag: primaryTag } : {})
@@ -750,8 +890,8 @@ class CardRenderer {
                 ? `<canvas class="blurhash-canvas" data-blurhash="${blurHash}"></canvas>`
                 : '';
         const imagePart = imageUrl
-            ? `${imageInnerHtml}${thumbPart}${blurHashHtml}<img src="${placeholder}" ${dataAttributes} alt="${item.Name}" class="lazy ${canExpand ? 'poster-layer' : ''}" />`
-            : `${CardRenderer.getFallbackHtml(item, isLandscape, { hideInitials })}${isModern && type === 'library' ? `<div class="card-overlay-label">${i18n.ensureBiDi(item.Name)}</div>` : ''}`;
+            ? `${imageInnerHtml}${thumbPart}${blurHashHtml}<img src="${placeholder}" ${dataAttributes} alt="${escapeHtml(item.Name)}" class="lazy ${canExpand ? 'poster-layer' : ''}" />`
+            : `${CardRenderer.getFallbackHtml(item, isLandscape, { hideInitials })}${isModern && type === 'library' ? `<div class="card-overlay-label">${escapeHtml(i18n.ensureBiDi(item.Name))}</div>` : ''}`;
         const finalContextType = contextType || item.Type;
 
         const isHiddenLibraryLabel =
@@ -765,7 +905,10 @@ class CardRenderer {
             const metaParts = [];
             if (item.OfficialRating) metaParts.push(`<span class="card-meta-rating">${item.OfficialRating}</span>`);
             if (item.CommunityRating && shouldShowScore(item))
-                metaParts.push(`<span class="card-meta-score">★ ${item.CommunityRating.toFixed(1)}</span>`);
+                // Render the unified SVG rating star instead of the legacy Unicode character.
+                metaParts.push(
+                    `<span class="card-meta-score">${detailsIcons.ratingStar}${item.CommunityRating.toFixed(1)}</span>`
+                );
             if (item.ProductionYear) metaParts.push(`<span class="card-meta-year">${item.ProductionYear}</span>`);
             if (item.RunTimeTicks) {
                 const mins = Math.round(item.RunTimeTicks / 600000000);
@@ -815,56 +958,56 @@ class CardRenderer {
             ${qualityBadgeHtml}
         `;
 
-        return `
+        const html = `
             <button class="${cssClass}${expansionClass}" data-item-id="${itemId}" data-type="${item.Type}" data-item-type="${item.Type}" data-collection-type="${item.CollectionType || ''}" data-context-type="${finalContextType}" data-channel-id="${item.ChannelId || ''}" tabindex="0">
-                <div class="card-image ${imageUrl ? 'skeleton-shimmer' : ''}">
+                <div class="card-image">
                     ${imagePart}
                     ${progressHtml}
                     ${videoBadgeHtml}
                     ${!options.showMeta ? badgeContainer : ''}
-                    ${
-                        showInside
-                            ? `
+                    ${showInside
+                ? `
                     <div class="card-info inside">
-                        ${
-                            options.showMeta
-                                ? `
+                        ${options.showMeta
+                    ? `
                         <div class="card-title-row">
-                            <div class="card-title">${titleText}</div>
+                            <div class="card-title"><span>${titleText}</span></div>
                             ${badgeContainer}
                         </div>
                         `
-                                : `<div class="card-title">${titleText}</div>`
-                        }
-                        ${subtitleText ? `<div class="card-subtitle">${subtitleText}</div>` : ''}
+                    : `<div class="card-title"><span>${titleText}</span></div>`
+                }
+                        ${subtitleText ? `<div class="card-subtitle"><span>${subtitleText}</span></div>` : ''}
                         ${metaHtml}
                     </div>
                     `
-                            : ''
-                    }
+                : ''
+            }
                 </div>
-                ${
-                    showOutside
-                        ? `
+                ${showOutside
+                ? `
                 <div class="card-info">
-                    ${
-                        options.showMeta
-                            ? `
+                    ${options.showMeta
+                    ? `
                     <div class="card-title-row">
-                        <div class="card-title">${titleText}</div>
+                        <div class="card-title"><span>${titleText}</span></div>
                         ${badgeContainer}
                     </div>
                     `
-                            : `<div class="card-title">${titleText}</div>`
-                    }
-                    ${subtitleText ? `<div class="card-subtitle">${subtitleText}</div>` : ''}
+                    : `<div class="card-title"><span>${titleText}</span></div>`
+                }
+                    ${subtitleText ? `<div class="card-subtitle"><span>${subtitleText}</span></div>` : ''}
                     ${metaHtml}
                 </div>
                 `
-                        : ''
-                }
+                : ''
+            }
             </button>
         `;
+
+        // Cache the output for reuse during this render context
+        CardRenderer._htmlCache.set(itemId, html);
+        return html;
     }
 
     /**
@@ -903,8 +1046,8 @@ class CardRenderer {
 
         return `
             <div class="media-fallback grad-${data.gradNum}">
-                ${!hideInitials ? `<div class="media-fallback-initials">${data.initials}</div>` : ''}
-                ${!isModern ? `<div class="media-fallback-name">${data.name}</div>` : ''}
+                ${!hideInitials ? `<div class="media-fallback-initials">${escapeHtml(data.initials)}</div>` : ''}
+                ${!isModern ? `<div class="media-fallback-name">${escapeHtml(data.name)}</div>` : ''}
             </div>
         `;
     }
@@ -954,15 +1097,14 @@ class CardRenderer {
                 html += `
                 <div class="${cardClass}">
                     <div class="card-image skeleton-image skeleton-shimmer"></div>
-                    ${
-                        !skeletonHideLabels
-                            ? `
+                    ${!skeletonHideLabels
+                        ? `
                     <div class="card-info">
                         <div class="card-title skeleton-line skeleton-shimmer w-80"></div>
                         ${!skeletonHideSubtitle ? `<div class="card-subtitle skeleton-line skeleton-shimmer w-50 mt-8"></div>` : ''}
                     </div>
                     `
-                            : ''
+                        : ''
                     }
                 </div>
             `;
@@ -980,7 +1122,7 @@ class CardRenderer {
                 html += `
                 <div class="${cardClass}">
                     <div class="card-image skeleton-image skeleton-shimmer">
-                        ${isIntegratedModern ? infoHtml : '<!-- Space reserved by aspect-ratio padding -->'}
+                        ${isIntegratedModern || isPortraitModern ? infoHtml : '<!-- Space reserved by aspect-ratio padding -->'}
                     </div>
                     ${!skeletonHideLabels && !isIntegratedModern && !isPortraitModern ? infoHtml : ''}
                 </div>

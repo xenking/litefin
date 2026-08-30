@@ -43,6 +43,7 @@ import { i18n } from '../utils/i18n.js';
 import { imageCache } from '../utils/ImageCache.js';
 import { imageService } from '../utils/ImageService.js';
 import CardRenderer from '../utils/CardRenderer.js';
+import { quickPlayItem } from '../utils/QuickPlay.js';
 import { homeLayoutManager } from '../utils/HomeLayoutManager.js';
 import { pluginManager } from '../plugins/PluginManager.js';
 import HeroCarousel from '../ui/HeroCarousel.js';
@@ -72,6 +73,14 @@ function getHomeResumeDedupKey(item) {
 
     return item.Id ? `item:${item.Id}` : null;
 }
+
+/**
+ * How long (in ms) to cache homepage data for instant back-navigation.
+ * 24 hours — cache lives in-memory (StateManager) so it's automatically
+ * cleared on app restart/refresh. Explicitly cleared on metadata refresh
+ * calls and settings changes that affect homepage display.
+ */
+const PAGE_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 /**
  * Card width definitions (matching home.css) — used by VirtualCardRow internally.
@@ -295,6 +304,9 @@ class HomePage extends Page {
          */
         const descriptors = [];
 
+        // Read user preference for homepage row items limit (defaults to 12)
+        const homeRowLimit = parseInt(storage.getItem('pref:homeRowsLimit') || 12, 10);
+
         // ── Priority 0: My Media (Libraries) ──────────────────────────────────
         // Libraries are already fetched at pipeline start and stored in
         // this._libraries — the fetchFn just resolves from memory.
@@ -334,19 +346,39 @@ class HomePage extends Page {
                 cardType: 'resume',
                 contextType: 'resume',
                 fetchFn: async () => {
+                    // Try to query the custom server-side merged endpoint first to speed up load times
+                    try {
+                        log.info('Attempting to fetch pre-merged continue/next-up rows from Litefin plugin');
+
+                        // Request a combined list of items limited by user's homeRowLimit setting
+                        const response = await api.getMergedRows({ limit: homeRowLimit });
+
+                        // If we got valid items back, return them immediately
+                        if (response && response.Items && response.Items.length > 0) {
+                            log.info('Successfully fetched merged items from server-side Litefin plugin');
+                            return response.Items;
+                        }
+                    } catch (err) {
+                        // Fall back to client-side merge if the plugin is not installed or returns an error
+                        log.warn(
+                            'Litefin plugin endpoint failed or not installed. Falling back to client-side merge:',
+                            err
+                        );
+                    }
+
                     // ──────────────────────────────────────────────────────────
-                    // STAGE 1: Parallel Fetching of Base Data Lists
+                    // FALLBACK: Parallel Fetching of Base Data Lists
                     // ──────────────────────────────────────────────────────────
                     // We initiate simultaneous network requests for both in-progress items
                     // and next-up show items to optimize load times and keep the UI highly
                     // responsive under typical domestic network latency.
                     const [resumeRes, nextUpRes] = await Promise.all([
-                        api.getResumeItems(),
+                        api.getResumeItems({ Limit: homeRowLimit }),
                         (async () => {
                             // Extract maximum cutoff days limit for Next Up items from local storage.
                             const maxDays = parseInt(storage.getItem('pref:nextUpMaxDays'), 10);
                             const daysLimit = isNaN(maxDays) ? 365 : maxDays;
-                            const params = {};
+                            const params = { Limit: homeRowLimit };
 
                             // If a valid cutoff constraint is present, pass it along as an ISO date string.
                             if (daysLimit > 0) {
@@ -488,7 +520,9 @@ class HomePage extends Page {
                         return timeB - timeA;
                     });
 
-                    return deduplicated.length > 0 ? deduplicated : null;
+                    // Return deduplicated results trimmed to homeRowLimit
+                    const sliced = deduplicated.slice(0, homeRowLimit);
+                    return sliced.length > 0 ? sliced : null;
                 }
             });
         } else {
@@ -501,7 +535,7 @@ class HomePage extends Page {
                 cardType: 'resume',
                 contextType: 'resume',
                 fetchFn: async () => {
-                    const res = await api.getResumeItems();
+                    const res = await api.getResumeItems({ Limit: homeRowLimit });
                     return res?.Items?.length > 0 ? res.Items : null;
                 }
             });
@@ -518,7 +552,7 @@ class HomePage extends Page {
                     const maxDays = parseInt(storage.getItem('pref:nextUpMaxDays'), 10);
                     const daysLimit = isNaN(maxDays) ? 365 : maxDays;
 
-                    const params = {};
+                    const params = { Limit: homeRowLimit };
                     if (daysLimit > 0) {
                         const cutoff = new Date();
                         cutoff.setDate(cutoff.getDate() - daysLimit);
@@ -551,10 +585,9 @@ class HomePage extends Page {
                 // Music, Live TV, Home Video, and Music Video libraries use square cards, everything else uses portrait
                 /*
                  * ============================================================
-                 * UI Layout Aspect Determination (Apple HIG Compliance)
+                 * UI Layout Aspect Determination
                  * ============================================================
                  *
-                 * Following Apple's Human Interface Guidelines, grid systems
                  * should display items in card aspect ratios that match their
                  * media type semantics.
                  *
@@ -566,23 +599,25 @@ class HomePage extends Page {
                  *     ratio ("portrait" or "poster" card type).
                  */
                 layout:
-                    lib.CollectionType === 'music' ||
-                    lib.CollectionType === 'livetv' ||
-                    lib.CollectionType === 'homevideos' ||
-                    lib.CollectionType === 'musicvideos'
+                    lib.CollectionType === 'musicvideos' || lib.CollectionType === 'homevideos'
+                        ? 'landscape'
+                        : lib.CollectionType === 'music' || lib.CollectionType === 'livetv'
                         ? 'square'
                         : 'portrait',
                 cardType:
-                    lib.CollectionType === 'music' ||
-                    lib.CollectionType === 'livetv' ||
-                    lib.CollectionType === 'homevideos' ||
-                    lib.CollectionType === 'musicvideos'
+                    lib.CollectionType === 'musicvideos' || lib.CollectionType === 'homevideos'
+                        ? 'thumb'
+                        : lib.CollectionType === 'music' || lib.CollectionType === 'livetv'
                         ? 'square'
                         : 'poster',
                 contextType: 'latest',
-                fetchFn: async () => {
+                fetchFn: async function () {
+                    if (this._preFetchedItems) {
+                        return this._preFetchedItems.length > 0 ? this._preFetchedItems : null;
+                    }
                     try {
                         const params = hidePlayedInLatest ? { Filters: 'IsUnplayed' } : {};
+                        params.Limit = homeRowLimit;
                         const items = await api.getLatestItems(lib.Id, params);
                         return items?.length > 0 ? items : null;
                     } catch (e) {
@@ -603,7 +638,7 @@ class HomePage extends Page {
         // preference under settings, we dynamically coerce all horizontal track rows
         // to use standard portrait layouts ('portrait') with 'poster' cards.
         // This ensures the custom expanding-backdrops and visual transitions apply
-        // universally, aligning with unified grids (Apple HIG style).
+        // universally, aligning with unified grids.
         // ====================================================================
         const isModern = layoutManager.getLayout() === 'modern';
         const forceExpandablePosters = isModern && storage.getItem('pref:homeForceExpandablePosters') === 'true';
@@ -652,48 +687,92 @@ class HomePage extends Page {
         try {
             log.info(`Starting progressive render pipeline for user ${preAuth.uid}`);
 
-            // ─── Step 1: Load core dependencies ──────────────────────────────
-            // Libraries are shared across multiple descriptors, so we fetch them
-            // once upfront before building the descriptor list.
-            await api.getCurrentUser(); // Validate session
-            const viewsResponse = await api.getUserViews();
-            this._libraries = viewsResponse.Items || [];
+            // ─── Step 0: Try to restore from cached data ────────────────────
+            // On back-navigation, avoid all network calls and render from cache.
+            const cache = this._getValidCache();
+            this._wasPageCached = !!cache;
 
-            if (!this._isMounted) return;
+            // Track promises for hero carousel and library thumb enrichment
+            // so we can await them alongside P0/P1 rows in Step 6.
+            let heroPromise = null;
+            let enrichPromise = null;
 
-            // ─── Step 1b: Prune stale libThumb:* cache keys ──────────────────
-            // If a library was removed from Jellyfin, its cached thumbnail URL
-            // stays in localStorage forever. We run a quick Set-lookup against
-            // the IDs we just fetched and evict any orphaned keys via StorageService
-            // (which correctly updates the in-memory cache, not just disk).
-            const currentLibraryIds = new Set(this._libraries.map((l) => l.Id));
-            storage
-                .keys()
-                .filter((k) => k.startsWith('libThumb:'))
-                .forEach((k) => {
-                    const id = k.replace('libThumb:', '');
-                    if (!currentLibraryIds.has(id)) {
-                        log.info(`Pruning stale libThumb for removed library: ${id}`);
-                        storage.removeItem(k);
+            if (cache) {
+                log.info('Restoring homepage from cache');
+                this._restoreFromCache(cache);
+
+                // Re-initialize the hero carousel from cached items — no API call needed.
+                // The enableHero preference is re-checked so the user's current setting
+                // is always honoured even after a settings change between navigations.
+                const enableHero = storage.getItem('pref:heroCarousel') !== 'false';
+                if (enableHero && cache.heroItems && cache.heroItems.length > 0) {
+                    this._initHeroCarouselFromItems(cache.heroItems);
+                }
+            } else {
+                // ─── Step 1: Load core dependencies ──────────────────────────────
+                // Libraries are shared across multiple descriptors.
+                // Check in-memory state cache first to avoid redundant network calls
+                // within the same app session.
+                const cachedLibs = state.get('home:libraries');
+                if (cachedLibs && cachedLibs.length > 0) {
+                    this._libraries = cachedLibs;
+                } else {
+                    const viewsResponse = await api.getUserViews();
+                    this._libraries = viewsResponse.Items || [];
+                    if (this._libraries.length > 0) {
+                        state.set('home:libraries', this._libraries);
                     }
-                });
+                }
 
-            // ─── Step 2: Optional dynamic library thumbnails ──────────────────
-            const thumbMode = storage.getItem('pref:libraryThumbMode') || 'off';
-            if ((thumbMode === 'static' || thumbMode === 'dynamic') && this._libraries.length > 0) {
-                await this._enrichLibrariesWithDynamicThumbs(this._libraries, thumbMode);
                 if (!this._isMounted) return;
-            }
 
-            // ─── Step 2b: Hero Carousel ──────────────────────────────────────
-            const enableHero = storage.getItem('pref:heroCarousel') !== 'false';
-            if (enableHero) {
-                await this._loadHeroCarousel();
-                if (!this._isMounted) return;
+                // ─── Step 1b: Prune stale libThumb:* cache keys ──────────────────
+                // If a library was removed from Jellyfin, its cached thumbnail URL
+                // stays in localStorage forever. We run a quick Set-lookup against
+                // the IDs we just fetched and evict any orphaned keys via StorageService
+                // (which correctly updates the in-memory cache, not just disk).
+                const currentLibraryIds = new Set(this._libraries.map((l) => l.Id));
+                storage
+                    .keys()
+                    .filter((k) => k.startsWith('libThumb:'))
+                    .forEach((k) => {
+                        const id = k.replace('libThumb:', '');
+                        if (!currentLibraryIds.has(id)) {
+                            log.info(`Pruning stale libThumb for removed library: ${id}`);
+                            storage.removeItem(k);
+                        }
+                    });
+
+                // ─── Step 2: Hero Carousel (fire in background) ──────────────────
+                // Hero does not depend on libraries — fetch it in parallel but do NOT
+                // await it here so row rendering starts immediately. It populates the
+                // hero placeholder when its data arrives.
+                // Insert a static placeholder so the hero area is sized correctly
+                // while data loads (no animated shimmer — just dark rectangles).
+                const enableHero = storage.getItem('pref:heroCarousel') !== 'false';
+                if (enableHero) {
+                    this._insertHeroSkeleton();
+                    heroPromise = this._loadHeroCarousel().catch((err) => log.error('Hero carousel failed', err));
+                }
+
+                // ─── Step 2b: Fire library thumb enrichment (parallel) ──────────
+                // Libraries are available — start enrichment immediately so the
+                // dynamic thumb URLs resolve before the library row renders below.
+                const thumbMode = storage.getItem('pref:libraryThumbMode') || 'off';
+                if ((thumbMode === 'static' || thumbMode === 'dynamic') && this._libraries.length > 0) {
+                    enrichPromise = this._enrichLibrariesWithDynamicThumbs(this._libraries, thumbMode).catch((err) =>
+                        log.warn('Background thumb enrichment failed', err)
+                    );
+                }
             }
 
             // ─── Step 3: Build descriptors ────────────────────────────────────
             const descriptors = this._getRowDescriptors();
+
+            // If restored from cache, replace fetchFns with cached item arrays
+            if (cache) {
+                this._applyCachedRowData(descriptors, cache.rows);
+            }
 
             // Validate focus target exists in the generated descriptors
             const lastFocusedObj = state.get('home:lastFocusedItem');
@@ -710,8 +789,10 @@ class HomePage extends Page {
                 return;
             }
 
-            // ─── Step 4: Insert skeleton placeholders instantly ───────────────
-            // This gives the user immediate visual feedback while data loads.
+            // ─── Step 4: Insert skeleton placeholders ─────────────────────────
+            // Static dark card rectangles (no animated shimmer) give the row
+            // correct visual sizing while data loads. BlurHash on live cards
+            // provides the actual loading state once _renderRow() replaces them.
             this._insertSkeletonRows(descriptors);
 
             // ─── Step 5: Group descriptors by priority ────────────────────────
@@ -720,66 +801,72 @@ class HomePage extends Page {
             const priorityGroups = this._groupByPriority(descriptors);
             const priorities = Array.from(priorityGroups.keys()).sort((a, b) => a - b);
 
-            // Dismiss the spinner visually — skeletons are now visible.
-            // NOTE: We suppress the app:hideSplash event here. The overridden
-            // setLoading() below skips emitting it so the splash stays visible
-            // until _tryInitializeFocus() has placed focus on the correct row.
-            //
-            // [FOCUS RESTORATION FIX]: Keep the loading spinner active whenever
-            // we have a saved focus target to restore — either from a back-button
-            // navigation (_pendingNavState) or from sidebar/forward navigation where
-            // home:lastFocusedItem was stored. In both cases we must wait until
-            // _tryInitializeFocus() has run inside its double rAF and set the correct
-            // focus + scroll before revealing the page, to prevent the visible flash
-            // of the page at scroll-top with no focused element.
+            // ─── Step 5.5: Batch pre-fetch latest library rows via plugin ────
+            await this._preFetchLatestRows(descriptors);
+
+            // Find target focus row if restoring back-navigation state
             const hasFocusTarget = this._pendingNavState || state.get('home:lastFocusedItem');
+            const savedFocusObj =
+                storage.getItem('pref:disableFocusRestore') !== 'true' ? state.get('home:lastFocusedItem') : null;
+            const targetRowId = savedFocusObj ? savedFocusObj.rowId : null;
+            const targetDescriptor = targetRowId ? descriptors.find((d) => d.id === targetRowId) : null;
+
+            // ─── Step 6: Render priority 0 + 1 + hero + target focus row ──────
+            // My Media (P0), Continue Watching/Next Up (P1), Hero Carousel, and
+            // target focus row are rendered and awaited BEFORE revealing the page
+            // so focus restoration succeeds without flashes or skeleton resets.
+            const earlyPriorities = [0, 1];
+            const earlyPromises = [];
+            for (const p of earlyPriorities) {
+                const group = priorityGroups.get(p);
+                if (group) {
+                    earlyPromises.push(...group.map((d) => this._loadAndRenderRow(d)));
+                }
+            }
+            if (targetDescriptor && !earlyPriorities.includes(targetDescriptor.priority)) {
+                earlyPromises.push(this._loadAndRenderRow(targetDescriptor));
+            }
+            if (heroPromise) {
+                earlyPromises.push(heroPromise);
+            }
+            if (enrichPromise) {
+                earlyPromises.push(enrichPromise);
+            }
+            await Promise.all(earlyPromises);
+            if (!this._isMounted) return;
+
+            // Dismiss the loading spinner now that critical content is rendered.
+            // If there's a focus target, _hideSplash() in Step 8 handles it after
+            // focus restoration — so we only dismiss here when there's no target.
             if (!hasFocusTarget) {
                 this.setLoading(false);
             }
 
-            // ─── Step 6: Render groups sequentially by priority ───────────────
-            for (const priority of priorities) {
-                const group = priorityGroups.get(priority);
-
-                // Fire all rows in this priority group in parallel
-                await Promise.all(group.map((descriptor) => this._loadAndRenderRow(descriptor)));
-
-                if (!this._isMounted) return;
-            }
-
-            // ─── Step 7: Post-render cleanup ──────────────────────────────────
-            // After all rows are rendered, pre-warm the ScrollController offset
-            // cache in one batched layout read (much cheaper than per-row reads).
-            this._prewarmScrollCache();
-
-            // Notify base Page that async content is ready for scroll/focus restoration
-            this.restoreScrollFocusWhenReady();
-
-            // Safety net: if no row triggered _tryInitializeFocus during rendering
-            // (e.g. all rows failed or there was no target row), initialize now.
-            if (!this._focusInitialized) {
-                this._tryInitializeFocus(this.$('#home-rows'));
-            }
-
-            // ── Reveal page with focus already in place ───────────────────────
-            // We wait until ALL rows have finished rendering before hiding the
-            // loading overlay. We use a rAF so that the browser paints the final
-            // fully-rendered row layout BEFORE we call _hideSplash(), and so that
-            // any focus-restoring rAF queued by _tryInitializeFocus() (which runs
-            // during Step 6) has already fired and placed focus correctly.
+            // ─── Step 7: Hide splash early + restore focus ───────────────────
+            // At this point My Media + content rows are visible. Reveal the page
+            // so the user can start interacting while remaining rows load.
             requestAnimationFrame(() => {
                 if (!this._isMounted) return;
 
-                // Execute any pending focus restoration callback
-                // (queued by _tryInitializeFocus when the target row rendered during Step 6)
-                if (typeof this._pendingFocusRestore === 'function') {
-                    this._pendingFocusRestore();
-                    this._pendingFocusRestore = null;
-                }
+                try {
+                    // Safety net: if no row triggered _tryInitializeFocus during P0/P1
+                    // (e.g. focus target is a background row), initialize on first row.
+                    if (!this._focusInitialized) {
+                        this._tryInitializeFocus(this.$('#home-rows'));
+                    }
 
-                // Final fallback: if nothing focused yet, go to sidebar
-                if (!focusManager.getActiveSection() && !focusManager.getFocused()) {
-                    this.setActiveSection('sidebar');
+                    // Execute any pending focus restoration callback
+                    if (typeof this._pendingFocusRestore === 'function') {
+                        this._pendingFocusRestore();
+                        this._pendingFocusRestore = null;
+                    }
+
+                    // Final fallback: if nothing focused yet, go to sidebar
+                    if (!focusManager.getActiveSection() && !focusManager.getFocused()) {
+                        this.setActiveSection('sidebar');
+                    }
+                } catch (err) {
+                    log.error('Focus restoration failed, hiding splash anyway', err);
                 }
 
                 // Mark ready only after focus restoration has completed; Page.markReady()
@@ -787,6 +874,25 @@ class HomePage extends Page {
                 this.markReady();
                 this._hideSplash();
             });
+
+            // ─── Step 9: Render remaining priority groups in background ────
+            // These rows are below the fold — non-critical for first interaction.
+            // We load them sequentially (one priority group at a time) so the
+            // HTTP connection pool isn't overwhelmed on slow TV processors.
+            const remainingPriorities = priorities.filter((p) => p !== 0 && p !== 1);
+            if (remainingPriorities.length > 0) {
+                this._loadBackgroundRows(remainingPriorities, priorityGroups).catch((err) =>
+                    log.error('Background row loading failed', err)
+                );
+            } else {
+                // No background rows — do cleanup now
+                this._prewarmScrollCache();
+                this.restoreScrollFocusWhenReady();
+                this.markReady();
+                if (!cache) {
+                    this._savePageCache();
+                }
+            }
         } catch (error) {
             log.error('Pipeline failed', error);
 
@@ -809,8 +915,9 @@ class HomePage extends Page {
 
     /**
      * Inserts a skeleton placeholder `<section>` for each descriptor into the
-     * home-rows container. The placeholders are replaced in-place when the
-     * actual data arrives, giving the user instant visual feedback.
+     * home-rows container. Cards are rendered as static dark rectangles (no
+     * animated shimmer) to give the row correct visual sizing while data loads.
+     * The placeholders are replaced in-place via _renderRow() once data arrives.
      *
      * Each skeleton uses `data-row-id` to allow `_loadAndRenderRow` to find
      * its placeholder and populate it without shifting other rows.
@@ -855,24 +962,46 @@ class HomePage extends Page {
                 sectionEl.style.setProperty('--skeleton-card-margin', `${itemMargin}px`);
             }
 
-            // Build skeleton interior — title + shimmer cards
-            // Number of skeleton cards to show: landscape rows fit ~5, portrait ~8
+            // Build skeleton interior — title + static placeholder cards
+            // The skeleton-shimmer class is stripped so these are just dark
+            // rectangles — no animated shimmer. BlurHash provides the loading
+            // state once live cards render.
             const skeletonCardCount = landscape ? 5 : 8;
-            const skeletonHtml = CardRenderer.createSkeletonHtml(
+            const rawHtml = CardRenderer.createSkeletonHtml(
                 skeletonCardCount,
                 landscape,
                 descriptor.cardType || 'poster',
                 shouldHideLabels
             );
+            const staticHtml = rawHtml.replace(/\bskeleton-shimmer\b/g, '');
 
             sectionEl.innerHTML = `
                 <h2 class="row-title">${descriptor.title}</h2>
                 <div class="row-items">
                     <div class="row-items-track">
-                        ${skeletonHtml}
+                        ${staticHtml}
                     </div>
                 </div>
             `;
+
+            // Override skeleton backgrounds with theme-following visible color.
+            // The default rgba(..., 0.08) from .skeleton-image / .skeleton-line
+            // is too subtle, and modern mode has an animated gradient on
+            // .card-image. We suppress both with higher-opacity overrides.
+            sectionEl.insertAdjacentHTML(
+                'afterbegin',
+                `
+                <style>
+                    .media-row--skeleton[data-row-id="${descriptor.id}"] .card-image,
+                    .media-row--skeleton[data-row-id="${descriptor.id}"] .skeleton-image,
+                    .media-row--skeleton[data-row-id="${descriptor.id}"] .skeleton-line {
+                        background-color: rgba(var(--jf-primary-btn-color-rgb, 255, 255, 255), 0.6) !important;
+                        background-image: none !important;
+                        animation: none !important;
+                    }
+                </style>
+            `
+            );
 
             container.appendChild(sectionEl);
         }
@@ -908,11 +1037,15 @@ class HomePage extends Page {
                 return;
             }
 
-            // Pre-warm image cache for this row's items (non-blocking)
-            this._preWarmImagesForRow(descriptor, items);
-
             // Find the placeholder and replace it with a live row
             this._renderRow(descriptor, items);
+
+            // Pre-warm image cache AFTER the row DOM is built, so the visible
+            // image loads from VirtualCardRow (lazyLoader.forceLoad) get HTTP
+            // connection pool priority over speculative pre-warm requests.
+            // This also prevents pre-warm from starving remaining API calls
+            // (each row's fetchFn is still in-flight for unfinished rows).
+            this._preWarmImagesForRow(descriptor, items);
             this._checkFocusRestoration(descriptor.id, true);
         } catch (error) {
             log.error(`Failed to load row "${descriptor.id}"`, error);
@@ -923,6 +1056,94 @@ class HomePage extends Page {
                 placeholder.remove();
             }
             this._checkFocusRestoration(descriptor.id, false);
+        }
+    }
+
+    /**
+     * Loads remaining priority groups in the background after the splash overlay
+     * has been hidden. Rows within each priority group fire in parallel, but groups
+     * run sequentially to avoid overwhelming the TV's limited HTTP connection pool.
+     *
+     * Once all background rows complete, runs post-render cleanup (prewarm scroll
+     * cache, markReady, save page cache, library thumb enrichment).
+     *
+     * @param {number[]} remainingPriorities - Priority values to load
+     * @param {Map<number, RowDescriptor[]>} priorityGroups
+     */
+    /**
+     * Pre-fetches all visible latest library rows in 1 single HTTP request via Litefin plugin.
+     * @param {RowDescriptor[]} descriptors
+     */
+    async _preFetchLatestRows(descriptors) {
+        const useBatchPlugin = storage.getItem('pref:useBatchLatestPlugin') !== 'false';
+        if (!useBatchPlugin) return;
+
+        const latestDescriptors = (descriptors || []).filter((d) => d.id?.startsWith('latest-'));
+        if (latestDescriptors.length === 0) return;
+
+        const libraryIds = latestDescriptors.map((d) => d.id.replace('latest-', ''));
+        const hidePlayed = storage.getItem('pref:hidePlayedInLatest') === 'true';
+        const homeRowLimit = parseInt(storage.getItem('pref:homeRowLimit') || '12', 10);
+
+        try {
+            const batchMap = await api.getBatchLatest(libraryIds, {
+                limit: homeRowLimit,
+                ...(hidePlayed ? { isPlayed: false } : {})
+            });
+
+            if (batchMap) {
+                const normalizedMap = {};
+                for (const [key, val] of Object.entries(batchMap)) {
+                    normalizedMap[key.replace(/-/g, '').toLowerCase()] = val;
+                }
+
+                latestDescriptors.forEach((d) => {
+                    const libId = d.id.replace('latest-', '').replace(/-/g, '').toLowerCase();
+                    if (normalizedMap[libId]) {
+                        const items = normalizedMap[libId];
+                        items.forEach((item) => {
+                            if (item.Id) item.Id = String(item.Id).replace(/-/g, '').toLowerCase();
+                            if (item.ServerId) item.ServerId = String(item.ServerId).replace(/-/g, '').toLowerCase();
+                        });
+                        d._preFetchedItems = items;
+                    }
+                });
+            }
+        } catch (err) {
+            log.debug('Batch latest pre-fetch skipped or unavailable', err);
+        }
+    }
+
+    /**
+     * Loads remaining priority groups in the background after the splash overlay
+     * has been hidden. Rows within each priority group fire in parallel, but groups
+     * run sequentially to avoid overwhelming the TV's limited HTTP connection pool.
+     *
+     * Once all background rows complete, runs post-render cleanup (prewarm scroll
+     * cache, markReady, save page cache, library thumb enrichment).
+     *
+     * @param {number[]} remainingPriorities - Priority values to load
+     * @param {Map<number, RowDescriptor[]>} priorityGroups
+     */
+    async _loadBackgroundRows(remainingPriorities, priorityGroups) {
+        for (const p of remainingPriorities) {
+            if (!this._isMounted) return;
+            const group = priorityGroups.get(p);
+            if (group) {
+                await Promise.all(group.map((d) => this._loadAndRenderRow(d)));
+            }
+        }
+
+        // ─── Post-background cleanup ──────────────────────────────────────
+        if (!this._isMounted) return;
+
+        this._prewarmScrollCache();
+        this.restoreScrollFocusWhenReady();
+        this.markReady();
+
+        // Save page cache for instant back-navigation (skip if restoring from cache)
+        if (!this._wasPageCached) {
+            this._savePageCache();
         }
     }
 
@@ -976,21 +1197,15 @@ class HomePage extends Page {
         // ── Instantiate VirtualCardRow ────────────────────────────────────────
         const trackEl = sectionEl.querySelector('.row-items-track');
 
+        const cardType = descriptor.cardType || 'poster';
+        const { visibleCount, initialWindow } = this._computeRowSizing(isLandscape, cardType);
+
         const virtualRow = new VirtualCardRow(trackEl, items, {
             isLandscape,
-            cardType: descriptor.cardType || 'poster',
+            cardType,
             hideLabels: shouldHideLabels,
-            // Sliding window size after initial boot render.
-            // Landscape rows: 6 cards in the window — ~4.5 fit in the TV viewport, so this gives
-            // about 1 card of lookahead on each side without keeping 8 large decoded backdrop
-            // images in GPU memory simultaneously.
-            // Portrait rows: 12 — narrower cards (240px) pack more per screen, lookahead is cheap.
-            visibleCount: isLandscape ? 6 : 12,
-            // Boot render: pre-render first N items before the user scrolls,
-            // so the row is ready to receive focus without on-demand DOM creation lag.
-            // Landscape rows get 5 (they're wide, so ~5 fill the screen).
-            // Portrait rows get all items (narrow, packs more per screen, worth the cost).
-            initialWindow: isLandscape ? 5 : items.length,
+            visibleCount,
+            initialWindow,
             focusSectionId: `home-row-${descriptor.id}`,
             // Card render function — delegates to CardRenderer via Page._renderMediaCard
             renderCard: (item) =>
@@ -1152,13 +1367,19 @@ class HomePage extends Page {
             if (!this._isMounted) return;
 
             // ─── Try restoring focus from back-navigation ─────────────────────
-            const lastFocusedObj = state.get('home:lastFocusedItem');
-            const legacyLastFocusedId = state.get('home:lastFocusedItemId');
+            let lastFocusedObj = null;
+            let legacyLastFocusedId = null;
+
+            if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                lastFocusedObj = state.get('home:lastFocusedItem');
+                legacyLastFocusedId = state.get('home:lastFocusedItemId');
+            }
 
             let restoredFocus = false;
 
             if (lastFocusedObj || legacyLastFocusedId) {
-                const targetId = lastFocusedObj ? lastFocusedObj.itemId : legacyLastFocusedId;
+                const rawTargetId = lastFocusedObj ? lastFocusedObj.itemId : legacyLastFocusedId;
+                const targetId = rawTargetId ? String(rawTargetId).replace(/-/g, '').toLowerCase() : null;
                 const targetRowId = lastFocusedObj ? lastFocusedObj.rowId : null;
 
                 let savedCard = null;
@@ -1167,13 +1388,23 @@ class HomePage extends Page {
                 if (targetRowId) {
                     const rowEntry = this._rowRegistry.get(targetRowId);
                     if (rowEntry) {
-                        savedCard = rowEntry.sectionEl.querySelector(`.media-card[data-item-id="${targetId}"]`);
+                        savedCard = Array.from(rowEntry.sectionEl.querySelectorAll('.media-card')).find(
+                            (card) =>
+                                String(card.dataset.itemId || '')
+                                    .replace(/-/g, '')
+                                    .toLowerCase() === targetId
+                        );
                     }
                 }
 
                 // Fall back to a global search
                 if (!savedCard) {
-                    savedCard = container.querySelector(`.media-card[data-item-id="${targetId}"]`);
+                    savedCard = Array.from(container.querySelectorAll('.media-card')).find(
+                        (card) =>
+                            String(card.dataset.itemId || '')
+                                .replace(/-/g, '')
+                                .toLowerCase() === targetId
+                    );
                 }
 
                 if (savedCard) {
@@ -1189,7 +1420,10 @@ class HomePage extends Page {
                     const rowEntry = this._rowRegistry.get(targetRowId);
                     if (rowEntry) {
                         const itemIndex = rowEntry.virtualRow.items.findIndex(
-                            (item) => String(item.Id) === String(targetId)
+                            (item) =>
+                                String(item.Id || '')
+                                    .replace(/-/g, '')
+                                    .toLowerCase() === targetId
                         );
                         if (itemIndex !== -1) {
                             const node = rowEntry.virtualRow.focusByIndex(itemIndex);
@@ -1206,21 +1440,34 @@ class HomePage extends Page {
                 state.delete('home:lastFocusedItem');
                 state.delete('home:lastFocusedItemId');
 
+                // ====================================================================
                 // Restore any captured scroll offset from NavigationState.
+                // ====================================================================
                 // Since we nullified this._pendingNavState synchronously above,
                 // restoreScrollFocusWhenReady() at the end of the pipeline is safely a no-op.
+                //
+                // We delegate this scroll positioning to ScrollController.smoothScrollTo
+                // with duration 0. This guarantees that if the user has GPU scroll mode
+                // enabled, we snap the translate3d transform of .vertical-scroll-track
+                // instead of corrupting the layout by writing to scrollTop directly.
+                // ====================================================================
                 if (restoredFocus && pendingNav) {
                     const scrollContainer = this.$('.page-content');
                     if (scrollContainer && pendingNav.scrollTop > 0) {
-                        scrollContainer.scrollTop = pendingNav.scrollTop;
+                        scrollController.smoothScrollTo(scrollContainer, pendingNav.scrollTop, 0, 'vertical');
                     }
                 }
+            } else if (storage.getItem('pref:disableFocusRestore') === 'true') {
+                // Clean up any stale saved state from before the toggle was turned on
+                state.delete('home:lastFocusedItem');
+                state.delete('home:lastFocusedItemId');
             }
 
             // ─── Default: focus the first card in the first rendered row ──────
             if (!restoredFocus) {
-                // Prioritize the hero carousel if it exists
-                if (this._hero && this.$('#hero-carousel-container')) {
+                // Prioritize the hero carousel if a home-hero section exists
+                // (registered during skeleton insertion or by the real carousel).
+                if (focusManager.getSectionConfig('home-hero') && this.$('#hero-carousel-container')) {
                     this.setActiveSection('home-hero', false);
                     focusManager.focusElement(this.$('#hero-carousel-container'), { instantScroll: true });
                 } else {
@@ -1277,13 +1524,15 @@ class HomePage extends Page {
             e.stopPropagation();
 
             // Save focused item + its row ID for exact focus restoration on back-nav
-            const sectionEl = card.closest('section[data-row-id]');
-            const rowId = sectionEl ? sectionEl.getAttribute('data-row-id') : null;
+            if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                const sectionEl = card.closest('section[data-row-id]');
+                const rowId = sectionEl ? sectionEl.getAttribute('data-row-id') : null;
 
-            state.set('home:lastFocusedItem', {
-                itemId: card.dataset.itemId,
-                rowId // Stable ID (not fragile DOM index)
-            });
+                state.set('home:lastFocusedItem', {
+                    itemId: card.dataset.itemId,
+                    rowId
+                });
+            }
 
             // Navigate based on context type
             const ctxType = card.dataset.contextType;
@@ -1328,6 +1577,46 @@ class HomePage extends Page {
                 rowEntry.virtualRow.syncIndexFromNode(e.target);
             }
         });
+
+        // ── Remote Play key → play the focused card directly ─────────────────
+        // Mirrors the official Jellyfin app: pressing the dedicated Play (or
+        // Play/Pause) key on a focused show/episode card starts playback without
+        // first opening its details page. Both events are bound because remotes
+        // expose either a discrete Play key (key:play) or a combined toggle
+        // (key:playPause). Page._subscriptions auto-unbinds these on destroy.
+        this.on('key:play', () => this._playFocusedCard());
+        this.on('key:playPause', () => this._playFocusedCard());
+    }
+
+    /**
+     * Launch playback of the currently focused media card (remote Play key).
+     * Skips cards that aren't directly playable (library folders, people).
+     */
+    _playFocusedCard() {
+        const card = this.$('.media-card.focused');
+        if (!card?.dataset?.itemId) {
+            log.debug('Play key pressed but no focused media card');
+            return;
+        }
+
+        const { itemId, type, contextType } = card.dataset;
+
+        // Library/collection cards open a library view; people open a person
+        // page — neither is directly playable, so let the Play key fall through.
+        if (contextType === 'library') return;
+        if (['Person', 'MusicArtist', 'Artist', 'AlbumArtist'].includes(type)) return;
+
+        // Persist focus for back-nav restoration, mirroring handleActivate().
+        if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+            const sectionEl = card.closest('section[data-row-id]');
+            state.set('home:lastFocusedItem', {
+                itemId,
+                rowId: sectionEl ? sectionEl.getAttribute('data-row-id') : null
+            });
+        }
+
+        log.info(`Play key: quick-playing focused card ${itemId} (${type || 'unknown'})`);
+        quickPlayItem(itemId);
     }
 
     // =========================================================================
@@ -1382,8 +1671,10 @@ class HomePage extends Page {
             if (nextConfig) nextConfig.leaveUp = `home-row-${rowId}`;
         }
 
-        // Special Case: If this is now the first row, link its leaveUp to the hero carousel
-        if (idx === 0 && this._hero) {
+        // Special Case: If this is now the first row, link its leaveUp to the hero carousel.
+        // Uses focusManager section existence rather than this._hero so the link is
+        // established even during the skeleton phase (before hero data loads).
+        if (idx === 0 && focusManager.getSectionConfig('home-hero')) {
             const firstRowConfig = focusManager.getSectionConfig(`home-row-${rowId}`);
             if (firstRowConfig) {
                 firstRowConfig.leaveUp = 'home-hero';
@@ -1395,6 +1686,64 @@ class HomePage extends Page {
                 }
             }
         }
+    }
+
+    /**
+     * Inserts a static placeholder inside the hero carousel container while
+     * carousel data loads. Keeps the hero area sized correctly — no animated
+     * shimmer, just dark rectangles that prevent layout shift.
+     * @private
+     */
+    _insertHeroSkeleton() {
+        const placeholder = this.$('#home-hero-placeholder');
+        if (!placeholder) return;
+
+        const carouselStyle = storage.getItem('pref:heroCarouselStyle') || 'immersive';
+        const isCompact = storage.getItem('pref:heroCarouselCompact') !== 'false';
+
+        placeholder.className = '';
+        placeholder.classList.add(`style-${carouselStyle}`);
+        if (isCompact) {
+            placeholder.classList.add('style-compact');
+        }
+
+        // -------------------------------------------------------------------------
+        // Safe Theme Color Retrieval for Legacy Environments
+        // -------------------------------------------------------------------------
+        // On ultra-legacy webviews (such as Tizen 3.0 or legacy WebOS WebKit engines),
+        // CSSStyleDeclaration.getPropertyValue() returns null when custom CSS properties
+        // are not natively resolved or prior to polyfill injection. Calling .trim()
+        // directly on null triggers a fatal startup exception:
+        // "ERR: Cannot read property 'trim' of null".
+        // -------------------------------------------------------------------------
+        const rawPrimaryRgb = getComputedStyle(document.documentElement).getPropertyValue('--jf-primary-btn-color-rgb');
+        const primaryRgb = (rawPrimaryRgb ? rawPrimaryRgb.trim() : '') || '255, 255, 255';
+
+        placeholder.innerHTML = `
+            <div id="hero-carousel-container" 
+                 class="hero-carousel-container ${carouselStyle} ${isCompact ? 'compact' : ''} skeleton" 
+                 tabindex="-1">
+                <div class="hero-carousel">
+                    <div class="hero-carousel-track">
+                        <div class="hero-item active">
+                            <div class="hero-backdrop" style="background: rgba(${primaryRgb}, 0.6);"></div>
+                            <div class="hero-content">
+                                <div class="hero-logo-skeleton" style="background: rgba(${primaryRgb}, 0.6); border-radius: 8px;"></div>
+                                <div class="hero-meta-row-skeleton" style="background: rgba(${primaryRgb}, 0.6); border-radius: 8px;"></div>
+                                <div class="hero-description-skeleton" style="background: rgba(${primaryRgb}, 0.6); border-radius: 8px;"></div>
+                                <div class="hero-description-skeleton-2" style="background: rgba(${primaryRgb}, 0.6); border-radius: 8px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        focusManager.register('home-hero', placeholder, {
+            orientation: 'horizontal',
+            leaveDown: null,
+            leaveLeft: 'sidebar'
+        });
     }
 
     /**
@@ -1411,25 +1760,74 @@ class HomePage extends Page {
             // HERO CAROUSEL DATA FILTERS RESOLUTION
             // =================================================================
             // Check if the user has enabled the "Ignore Watched Content" preference.
-            // If active, we append the 'IsUnplayed' item filter to the request so that
-            // the Jellyfin backend returns only unplayed Movies and Series for the banner.
+            // The Jellyfin 'IsUnplayed' server-side filter works for Movies but not
+            // for Series (where play state is tracked per-episode). When the filter
+            // is active we make separate requests: Movies with the server-side
+            // 'IsUnplayed' filter, and Series fetched normally then filtered
+            // client-side by checking UserData.Played.
             const ignoreWatched = storage.getItem('pref:heroCarouselIgnoreWatched') === 'true';
-            const filters = ignoreWatched ? 'HasBackdrop,IsUnplayed' : 'HasBackdrop';
+            const fields =
+                'Overview,ImageTags,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ParentLogoImageTag,ParentLogoItemId,SeriesId,ProviderIds,MediaSourceCount';
+            const imageTypes = 'Primary,Backdrop,Logo';
 
-            // Fetch random items with backdrops from user libraries.
-            const response = await api.getItems({
-                SortBy: 'Random',
-                Recursive: true,
-                Limit: limit,
-                Fields: 'Overview,ImageTags,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ParentLogoImageTag,ParentLogoItemId,SeriesId,ProviderIds',
-                EnableImageTypes: 'Primary,Backdrop,Logo',
-                IncludeItemTypes: 'Movie,Series',
-                Filters: filters
-            });
+            let items = [];
 
-            if (!this._isMounted) return;
+            // Try single-pass fetch via Litefin Plugin endpoint
+            const pluginHero = await api.getHomeHero({ limit, ignoreWatched });
+            if (pluginHero && Array.isArray(pluginHero.Items) && pluginHero.Items.length > 0) {
+                items = pluginHero.Items;
+            } else if (ignoreWatched) {
+                // Fallback: Fetch unplayed movies (IsUnplayed works correctly for Movies)
+                const moviesResponse = await api.getItems({
+                    SortBy: 'Random',
+                    Recursive: true,
+                    Limit: limit,
+                    Fields: fields,
+                    EnableImageTypes: imageTypes,
+                    IncludeItemTypes: 'Movie',
+                    Filters: 'HasBackdrop,IsUnplayed'
+                });
 
-            const items = response.Items || [];
+                if (!this._isMounted) return;
+
+                const movies = moviesResponse.Items || [];
+
+                // Fetch series and filter client-side (IsUnplayed doesn't work for Series)
+                const seriesResponse = await api.getItems({
+                    SortBy: 'Random',
+                    Recursive: true,
+                    Limit: limit,
+                    Fields: `${fields},UserData`,
+                    EnableImageTypes: imageTypes,
+                    IncludeItemTypes: 'Series',
+                    Filters: 'HasBackdrop'
+                });
+
+                if (!this._isMounted) return;
+
+                const series = (seriesResponse.Items || []).filter(
+                    (item) => !item.UserData || item.UserData.Played !== true
+                );
+
+                // Combine and randomly pick 'limit' items
+                const combined = [...movies, ...series];
+                items = combined.sort(() => Math.random() - 0.5).slice(0, limit);
+            } else {
+                // Fallback: No filter — single fetch for both types
+                const response = await api.getItems({
+                    SortBy: 'Random',
+                    Recursive: true,
+                    Limit: limit,
+                    Fields: fields,
+                    EnableImageTypes: imageTypes,
+                    IncludeItemTypes: 'Movie,Series',
+                    Filters: 'HasBackdrop'
+                });
+
+                if (!this._isMounted) return;
+
+                items = response.Items || [];
+            }
             if (items.length === 0) {
                 log.info('No hero items found, skipping carousel.');
                 return;
@@ -1478,6 +1876,16 @@ class HomePage extends Page {
                 // Render the hero carousel and initialize its event listeners
                 placeholder.innerHTML = this._hero.render();
                 this._hero.init(placeholder.firstElementChild);
+
+                // Relink the first rendered row and the hero carousel now that the hero has initialized
+                const container = this.$('#home-rows');
+                if (container) {
+                    const firstRow = container.querySelector('section[data-row-id]:not(.media-row--skeleton)');
+                    if (firstRow) {
+                        const firstRowId = firstRow.getAttribute('data-row-id');
+                        this._relinkAdjacentSections(container, firstRow, firstRowId);
+                    }
+                }
             }
         } catch (e) {
             log.error('Failed to load Hero Carousel', e);
@@ -1533,6 +1941,66 @@ class HomePage extends Page {
         const mediaRows = this.$('#home-rows').querySelectorAll('.media-row');
         scrollController.prewarmOffsetCache(mediaRows, pageContent);
         log.debug(`Pre-warmed scroll cache for ${mediaRows.length} rows`);
+    }
+
+    /**
+     * Compute optimal VirtualCardRow sizing (visibleCount / initialWindow)
+     * based on actual card dimensions and viewport width.
+     *
+     * Card widths mirror the constants in VirtualCardRow constructor:
+     *   Classic: landscape=400, portrait=240, margin=24
+     *   Modern:  landscape=600, portrait=225, square=338, margin=40
+     *   Scale factor from user preference (pref:classicCardSizeScale or
+     *   pref:modernCardSizeScale).
+     *
+     * visibleCount = viewport + 2 (small buffer for smooth scrolling),
+     * clamped to [6, 10]. This keeps DOM/GPU memory light on TV hardware
+     * while giving enough lookahead for comfortable right-scrolling.
+     *
+     * initialWindow matches visibleCount so boot render and the first
+     * interaction window are identical — no sudden DOM expansion on
+     * the first right-press.
+     *
+     * @param {boolean} isLandscape
+     * @param {string} cardType
+     * @returns {{ visibleCount: number, initialWindow: number }}
+     */
+    _computeRowSizing(isLandscape, cardType) {
+        const isModern = document.documentElement.getAttribute('data-layout-media-rows') === 'modern';
+        const VIEWPORT_WIDTH = window.innerWidth || 1920;
+        const SIDE_PADDING = 60;
+        const MAX_VISIBLE = Math.ceil(parseInt(storage.getItem('pref:homeRowsLimit') || 12, 10) * 0.8);
+
+        let itemWidth, itemMargin;
+
+        if (isModern) {
+            const scale = parseFloat(storage.getItem('pref:modernCardSizeScale')) || 1.3;
+            const m = scale / 1.5;
+
+            if (isLandscape) {
+                itemWidth = Math.round(600 * m);
+            } else if (cardType === 'square' || cardType === 'artist') {
+                itemWidth = Math.round(338 * m);
+            } else {
+                itemWidth = Math.round(225 * m);
+            }
+            itemMargin = Math.round(40 * m);
+        } else {
+            const scale = parseFloat(storage.getItem('pref:classicCardSizeScale')) || 1.0;
+            itemWidth = Math.round((isLandscape ? 400 : 240) * scale);
+            itemMargin = Math.round(24 * scale);
+        }
+
+        const totalItemWidth = itemWidth + itemMargin;
+        const usableWidth = VIEWPORT_WIDTH - SIDE_PADDING * 2;
+        const visibleInViewport = Math.max(1, Math.floor(usableWidth / totalItemWidth));
+
+        // Viewport + 2 small buffer, clamped [6, 10]. initialWindow matches visibleCount
+        // so the first right-press doesn't trigger a sudden DOM expansion.
+        const visibleCount = Math.max(6, Math.min(MAX_VISIBLE, visibleInViewport + 2));
+        const initialWindow = visibleCount;
+
+        return { visibleCount, initialWindow };
     }
 
     /**
@@ -1606,117 +2074,127 @@ class HomePage extends Page {
      * @param {'static'|'dynamic'} mode
      */
     async _enrichLibrariesWithDynamicThumbs(libraries, mode) {
-        // Process all libraries in parallel for maximum speed
+        if (!libraries || libraries.length === 0) return;
+
+        // Try single-pass batch fetch for all uncached libraries via Litefin plugin
+        const uncachedLibs = libraries.filter((lib) => {
+            if (mode === 'static') {
+                const cacheKey = `libThumb:${lib.Id}`;
+                const cachedUrl = storage.getItem(cacheKey);
+                if (cachedUrl) {
+                    lib._dynamicThumbUrl = cachedUrl;
+                    this._applyDynamicThumbToCard(lib.Id, cachedUrl, lib.Name);
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        let batchMap = null;
+        if (uncachedLibs.length > 0) {
+            const libIds = uncachedLibs.map((lib) => lib.Id);
+            const rawBatch = await api.getLibraryThumbnails(libIds);
+            if (rawBatch) {
+                batchMap = {};
+                for (const [key, val] of Object.entries(rawBatch)) {
+                    batchMap[key.replace(/-/g, '').toLowerCase()] = val;
+                }
+            }
+        }
+
+        // Process libraries using batched candidates or fallback queries
         await Promise.all(
             libraries.map(async (lib) => {
                 try {
                     const cacheKey = `libThumb:${lib.Id}`;
 
-                    // Static mode: check StorageService cache first (in-memory, zero disk I/O).
-                    // Using storage.getItem() instead of localStorage.getItem() so the read
-                    // comes from the in-memory Map rather than hitting the disk synchronously.
                     if (mode === 'static') {
                         const cachedUrl = storage.getItem(cacheKey);
                         if (cachedUrl) {
                             lib._dynamicThumbUrl = cachedUrl;
+                            this._applyDynamicThumbToCard(lib.Id, cachedUrl, lib.Name);
                             return;
                         }
                     }
 
-                    // ==========================================================
-                    // Dynamic Thumbnail Candidate Typing
-                    // ==========================================================
-                    // Map the library collection type to the most appropriate
-                    // Jellyfin item type that yields high-resolution artwork:
-                    //
-                    // - music: MusicAlbum works better than track/artist stubs.
-                    // - musicvideos: Query MusicVideo items recursively.
-                    // - livetv: Query TvChannel items to pull in channel logo artwork.
-                    // - photos: Include both Photo and Video contents since camera
-                    //   rolls naturally mix images and videos.
-                    // - homevideos: Query Video items recursively since they
-                    //   never have standard "Movie" or "Series" tags.
-                    // ==========================================================
-                    const includeItemTypes = (() => {
-                        switch (lib.CollectionType) {
-                            case 'music':
-                                return 'MusicAlbum';
-                            case 'musicvideos':
-                                return 'MusicVideo';
-                            case 'livetv':
-                                return 'TvChannel';
-                            case 'boxsets':
-                                return 'BoxSet';
-                            case 'photos':
-                                return 'Photo,Video';
-                            case 'homevideos':
-                                // Allow both photo and video items from home video libraries
-                                // to act as candidates for dynamic fallback thumbnail generation.
-                                return 'Photo,Video';
-                            case 'playlists':
-                                return 'Playlist';
-                            default:
-                                return 'Movie,Series';
+                    const normalizedId = String(lib.Id || '')
+                        .replace(/-/g, '')
+                        .toLowerCase();
+                    const batchEntry = batchMap ? batchMap[normalizedId] : undefined;
+
+                    // New plugin format: {Items: [...], ResolvedUrl: "..."}
+                    // Old format: flat array [{...}, ...] (backwards compat)
+                    const preResolvedUrl = batchEntry && !Array.isArray(batchEntry) ? batchEntry.ResolvedUrl : null;
+                    let items = batchEntry ? (Array.isArray(batchEntry) ? batchEntry : batchEntry.Items || []) : [];
+
+                    // Short-circuit: use pre-resolved URL from plugin directly
+                    if (preResolvedUrl) {
+                        lib._dynamicThumbUrl = preResolvedUrl;
+                        this._applyDynamicThumbToCard(lib.Id, preResolvedUrl, lib.Name);
+                        if (mode === 'static') {
+                            storage.setItem(cacheKey, preResolvedUrl);
                         }
-                    })();
-
-                    // ==========================================================
-                    // Dynamic Thumbnail Library Query
-                    // ==========================================================
-                    // Live TV (livetv) libraries are not standard folder structures
-                    // and do not have child items under a ParentId. Instead, they
-                    // store global TV Channels, which we fetch using the specialized
-                    // getLiveTvChannels API endpoint. Everything else uses standard
-                    // child item queries.
-                    // ==========================================================
-                    let response;
-                    if (lib.CollectionType === 'livetv') {
-                        // -----------------------------------------------------
-                        // Live TV Dynamic Thumbnail Randomization
-                        // -----------------------------------------------------
-                        // We query the first 50 channels with image types explicitly enabled
-                        // to guarantee that the server delivers proper ImageTags and aspect ratios.
-                        // Then we filter out any channels without valid images before shuffling
-                        // to ensure a successful rotating thumbnail selection.
-                        // -----------------------------------------------------
-                        const ltvResponse = await api.getLiveTvChannels({
-                            Limit: 50,
-                            EnableImageTypes: 'Primary,Thumb,Backdrop',
-                            Fields: 'PrimaryImageAspectRatio,ImageTags,BackdropImageTags'
-                        });
-
-                        // Extract channel items safely
-                        const ltvItems = ltvResponse?.Items || [];
-
-                        // Filter channels to only those with valid primary, thumb or backdrop artwork
-                        const validLtvItems = ltvItems.filter(
-                            (item) =>
-                                item.ImageTags?.Primary || item.ImageTags?.Thumb || item.BackdropImageTags?.length > 0
-                        );
-
-                        // Local shuffle to randomize the logo across loads
-                        const shuffledLtv = validLtvItems.sort(() => 0.5 - Math.random());
-                        response = { Items: shuffledLtv.slice(0, 5) };
-                    } else {
-                        response = await api.getItems({
-                            ParentId: lib.Id,
-                            SortBy: 'Random',
-                            Recursive: true,
-                            Limit: 5,
-                            Fields: 'BackdropImageTags,ImageTags',
-                            ImageTypeLimit: 1,
-                            IncludeItemTypes: includeItemTypes,
-                            EnableImageTypes: 'Backdrop,Thumb,Primary',
-                            Filters: 'HasImage' // Only items with guaranteed artwork
-                        });
+                        return;
                     }
 
-                    if (response?.Items?.length > 0) {
+                    // Fallback to individual API call if batch map didn't contain this library
+                    if (!batchMap || batchEntry === undefined) {
+                        const includeItemTypes = (() => {
+                            switch (lib.CollectionType) {
+                                case 'music':
+                                    return 'MusicAlbum';
+                                case 'musicvideos':
+                                    return 'MusicVideo';
+                                case 'livetv':
+                                    return 'TvChannel';
+                                case 'boxsets':
+                                    return 'BoxSet';
+                                case 'photos':
+                                case 'homevideos':
+                                    return 'Photo,Video';
+                                case 'playlists':
+                                    return 'Playlist';
+                                default:
+                                    return 'Movie,Series';
+                            }
+                        })();
+
+                        if (lib.CollectionType === 'livetv') {
+                            const ltvResponse = await api.getLiveTvChannels({
+                                Limit: 50,
+                                EnableImageTypes: 'Primary,Thumb,Backdrop',
+                                Fields: 'ImageTags,BackdropImageTags'
+                            });
+                            const ltvItems = ltvResponse?.Items || [];
+                            const validLtvItems = ltvItems.filter(
+                                (item) =>
+                                    item.ImageTags?.Primary ||
+                                    item.ImageTags?.Thumb ||
+                                    item.BackdropImageTags?.length > 0
+                            );
+                            items = validLtvItems.sort(() => 0.5 - Math.random()).slice(0, 5);
+                        } else {
+                            const response = await api.getItems({
+                                ParentId: lib.Id,
+                                SortBy: 'Random',
+                                Recursive: true,
+                                Limit: 5,
+                                Fields: 'BackdropImageTags,ImageTags',
+                                ImageTypeLimit: 1,
+                                IncludeItemTypes: includeItemTypes,
+                                EnableImageTypes: 'Backdrop,Thumb,Primary',
+                                Filters: 'HasImage'
+                            });
+                            items = response?.Items || [];
+                        }
+                    }
+
+                    if (items && items.length > 0) {
                         const { maxWidth, quality } = imageService.getParams('card-backdrop');
                         let resolvedUrl = null;
 
                         // Iterate candidates until we find a usable image URL
-                        for (const item of response.Items) {
+                        for (const item of items) {
                             if (lib.CollectionType === 'music') {
                                 // Music: album art (Primary) → Thumb → Backdrop
                                 if (item.ImageTags?.Primary) {
@@ -1739,62 +2217,45 @@ class HomePage extends Page {
                                     });
                                 }
                             } else if (lib.CollectionType === 'playlists') {
-                                // Playlists themselves usually only have a 4-item grid (Primary) and no Backdrop.
-                                // To get a true landscape backdrop for the home page, we fetch the items
-                                // inside the playlist and grab a backdrop from one of them.
-                                try {
-                                    const pResponse = await api.getPlaylistItems(item.Id, {
-                                        Limit: 20,
-                                        Fields: 'BackdropImageTags'
+                                // Playlists: item's own Primary → Thumb → Backdrop
+                                if (item.ImageTags?.Primary) {
+                                    resolvedUrl = api.getImageUrl(item.Id, 'Primary', {
+                                        maxWidth,
+                                        quality,
+                                        tag: item.ImageTags.Primary
                                     });
-
-                                    const pItems = pResponse?.Items || [];
-                                    // Shuffle locally so the backdrop changes across reloads
-                                    const shuffled = pItems.sort(() => 0.5 - Math.random());
-
-                                    for (const pItem of shuffled) {
-                                        if (pItem.BackdropImageTags?.length > 0) {
-                                            resolvedUrl = api.getImageUrl(pItem.Id, 'Backdrop', {
-                                                maxWidth,
-                                                quality,
-                                                tag: pItem.BackdropImageTags[0]
-                                            });
-                                            break;
-                                        }
-                                    }
-                                } catch (e) {
-                                    log.warn(`Failed to fetch items for playlist ${item.Id} for dynamic thumb`, e);
-                                }
-
-                                // Fallback to the playlist's own primary/backdrop if we couldn't find one inside
-                                if (!resolvedUrl) {
-                                    if (item.BackdropImageTags?.length > 0) {
-                                        resolvedUrl = api.getImageUrl(item.Id, 'Backdrop', {
-                                            maxWidth,
-                                            quality,
-                                            tag: item.BackdropImageTags[0]
-                                        });
-                                    } else if (item.ImageTags?.Primary) {
-                                        resolvedUrl = api.getImageUrl(item.Id, 'Primary', {
-                                            maxWidth,
-                                            quality,
-                                            tag: item.ImageTags.Primary
-                                        });
-                                    }
-                                }
-                            } else if (lib.CollectionType === 'boxsets') {
-                                // Collections: Backdrop → Primary
-                                if (item.BackdropImageTags?.length > 0) {
+                                } else if (item.ImageTags?.Thumb) {
+                                    resolvedUrl = api.getImageUrl(item.Id, 'Thumb', {
+                                        maxWidth,
+                                        quality,
+                                        tag: item.ImageTags.Thumb
+                                    });
+                                } else if (item.BackdropImageTags?.length > 0) {
                                     resolvedUrl = api.getImageUrl(item.Id, 'Backdrop', {
                                         maxWidth,
                                         quality,
                                         tag: item.BackdropImageTags[0]
                                     });
-                                } else if (item.ImageTags?.Primary) {
+                                }
+                            } else if (lib.CollectionType === 'boxsets') {
+                                // Boxsets: item's own Primary → Thumb → Backdrop
+                                if (item.ImageTags?.Primary) {
                                     resolvedUrl = api.getImageUrl(item.Id, 'Primary', {
                                         maxWidth,
                                         quality,
                                         tag: item.ImageTags.Primary
+                                    });
+                                } else if (item.ImageTags?.Thumb) {
+                                    resolvedUrl = api.getImageUrl(item.Id, 'Thumb', {
+                                        maxWidth,
+                                        quality,
+                                        tag: item.ImageTags.Thumb
+                                    });
+                                } else if (item.BackdropImageTags?.length > 0) {
+                                    resolvedUrl = api.getImageUrl(item.Id, 'Backdrop', {
+                                        maxWidth,
+                                        quality,
+                                        tag: item.BackdropImageTags[0]
                                     });
                                 }
                             } else if (
@@ -1803,13 +2264,6 @@ class HomePage extends Page {
                                 lib.CollectionType === 'musicvideos' ||
                                 lib.CollectionType === 'livetv'
                             ) {
-                                // ==========================================================
-                                // Photo, Home Videos, Music Videos & Live TV Fallbacks
-                                // ==========================================================
-                                // These libraries do not rely on standard theatrical backdrops.
-                                // Instead, we prioritize the Primary tag (photos, channel logos,
-                                // video snapshots) to immediately capture the authentic artwork.
-                                // ==========================================================
                                 if (item.ImageTags?.Primary) {
                                     resolvedUrl = api.getImageUrl(item.Id, 'Primary', {
                                         maxWidth,
@@ -1824,12 +2278,7 @@ class HomePage extends Page {
                                     });
                                 }
                             } else {
-                                // ==========================================================
-                                // Standard Fallback Chain (Movies, Series, etc.)
-                                // ==========================================================
-                                // backdrop is always prioritized for library landscape cards
-                                // to create a dramatic theatrical header feel.
-                                // ==========================================================
+                                // Standard: Backdrop → Thumb → Primary
                                 if (item.BackdropImageTags?.length > 0) {
                                     resolvedUrl = api.getImageUrl(item.Id, 'Backdrop', {
                                         maxWidth,
@@ -1873,7 +2322,7 @@ class HomePage extends Page {
                                 const ltvFallback = await api.getLiveTvChannels({
                                     Limit: 50,
                                     EnableImageTypes: 'Primary,Thumb,Backdrop',
-                                    Fields: 'PrimaryImageAspectRatio,ImageTags,BackdropImageTags'
+                                    Fields: 'ImageTags,BackdropImageTags'
                                 });
 
                                 // Extract items safely
@@ -1929,6 +2378,7 @@ class HomePage extends Page {
 
                         if (resolvedUrl) {
                             lib._dynamicThumbUrl = resolvedUrl;
+                            this._applyDynamicThumbToCard(lib.Id, resolvedUrl, lib.Name);
                             // Persist the resolved URL via StorageService in static mode so
                             // subsequent home page loads skip the API call entirely.
                             // Using storage.setItem() (not localStorage directly) keeps the
@@ -1944,6 +2394,179 @@ class HomePage extends Page {
                 }
             })
         );
+    }
+
+    /**
+     * Updates the rendered library card's image to reflect the dynamic thumb URL,
+     * and adds the overlay label if missing. The overlay is normally baked into the
+     * card HTML at render time only when _dynamicThumbUrl was already set — since
+     * enrichment runs after render, we inject it here.
+     * @param {string} libId - Library ID
+     * @param {string} url - New dynamic thumbnail URL
+     * @param {string} [name] - Library display name (for overlay label)
+     */
+    _applyDynamicThumbToCard(libId, url, name) {
+        const lazyImg = document.querySelector(`.media-card[data-item-id="${libId}"] .lazy`);
+        if (!lazyImg) return;
+        if (lazyImg.dataset.src === url) return;
+
+        lazyImg.dataset.src = url;
+
+        if (!lazyImg.classList.contains('loaded') && !lazyImg.hasAttribute('data-lazy-loading')) {
+            lazyLoader.forceLoad(lazyImg);
+        } else if (lazyImg.classList.contains('loaded')) {
+            lazyImg.src = url;
+        }
+
+        // Insert overlay label if the card was rendered without it
+        const imageDiv = lazyImg.closest('.card-image');
+        if (imageDiv && name && !imageDiv.querySelector('.card-overlay-label')) {
+            imageDiv.insertAdjacentHTML(
+                'afterbegin',
+                `<div class="card-overlay-tint"></div><div class="card-overlay-label">${i18n.ensureBiDi(name)}</div>`
+            );
+        }
+    }
+
+    // =========================================================================
+    // Page Data Cache (instant back-navigation)
+    // =========================================================================
+
+    /**
+     * Returns the cached homepage data if it exists and hasn't expired.
+     * @returns {Object|null} Cache object or null
+     */
+    _getValidCache() {
+        // Respect user preference — caching can be disabled via settings
+        if (storage.getItem('pref:homeScreenCache') === 'false') {
+            state.delete('home:pageCache');
+            return null;
+        }
+
+        const cache = state.get('home:pageCache');
+        if (!cache || !cache.rows || !cache.libraries) return null;
+
+        // Never serve cache from a different user or server
+        if (cache.serverUrl !== api._serverUrl || cache.userId !== api._userId) {
+            state.delete('home:pageCache');
+            return null;
+        }
+
+        if (Date.now() - cache.timestamp > PAGE_CACHE_TTL) {
+            state.delete('home:pageCache');
+            return null;
+        }
+
+        return cache;
+    }
+
+    /**
+     * Restores libraries and thumbnails from cache, skipping network calls.
+     * @param {Object} cache
+     */
+    _restoreFromCache(cache) {
+        this._libraries = cache.libraries;
+
+        // Only restore cached thumb URLs when in static mode — dynamic mode
+        // should show fresh images each load, and off mode should show none.
+        const thumbMode = storage.getItem('pref:libraryThumbMode') || 'off';
+        if (thumbMode === 'static' && cache.thumbUrls) {
+            for (const lib of this._libraries) {
+                const url = cache.thumbUrls[lib.Id];
+                if (url) lib._dynamicThumbUrl = url;
+            }
+        }
+    }
+
+    /**
+     * Initializes the HeroCarousel component from a pre-fetched items array.
+     * Extracted from _loadHeroCarousel() so it can be reused during cache restoration
+     * without making any network calls — the items are already in memory.
+     *
+     * @param {Array} items - Previously fetched hero carousel items
+     */
+    _initHeroCarouselFromItems(items) {
+        try {
+            // Build the carousel instance from the cached items list
+            this._hero = new HeroCarousel({ items });
+
+            const placeholder = this.$('#home-hero-placeholder');
+            if (placeholder) {
+                // Read style prefs fresh — user may have changed them since the cache was written
+                const carouselStyle = storage.getItem('pref:heroCarouselStyle') || 'immersive';
+                const isCompact = storage.getItem('pref:heroCarouselCompact') !== 'false';
+
+                // Reset any stale classes before applying current style
+                placeholder.className = '';
+                placeholder.classList.add(`style-${carouselStyle}`);
+                if (isCompact) {
+                    placeholder.classList.add('style-compact');
+                }
+
+                // Inject the carousel markup and wire up its event listeners
+                placeholder.innerHTML = this._hero.render();
+                this._hero.init(placeholder.firstElementChild);
+
+                log.info('Hero carousel restored from cache.');
+            }
+        } catch (e) {
+            log.error('Failed to initialize Hero Carousel from cache', e);
+        }
+    }
+
+    /**
+     * Replaces each descriptor's fetchFn to return cached items instantly.
+     * @param {RowDescriptor[]} descriptors
+     * @param {Object<string, Array>} rowCache - Row ID -> items map
+     */
+    _applyCachedRowData(descriptors, rowCache) {
+        for (const desc of descriptors) {
+            const cachedItems = rowCache[desc.id];
+            if (cachedItems) {
+                desc.fetchFn = () => Promise.resolve(cachedItems);
+            }
+        }
+    }
+
+    /**
+     * Saves the current homepage data to the state cache,
+     * so that back-navigation renders instantly without network calls.
+     * Hero carousel items are also persisted so the carousel can be
+     * re-initialized on restoration without any network calls.
+     */
+    _savePageCache() {
+        // Respect user preference
+        if (storage.getItem('pref:homeScreenCache') === 'false') return;
+
+        const rows = {};
+        for (const [id, entry] of this._rowRegistry) {
+            if (entry.virtualRow && entry.virtualRow.items && entry.virtualRow.items.length > 0) {
+                rows[id] = entry.virtualRow.items;
+            }
+        }
+
+        const thumbUrls = {};
+        for (const lib of this._libraries) {
+            if (lib._dynamicThumbUrl) {
+                thumbUrls[lib.Id] = lib._dynamicThumbUrl;
+            }
+        }
+
+        // Snapshot the hero carousel items so restoration skips the API call entirely.
+        // HeroCarousel stores its items array on the instance as ._items.
+        const heroItems = this._hero ? this._hero._items : [];
+
+        state.set('home:pageCache', {
+            libraries: this._libraries,
+            thumbUrls,
+            rows,
+            heroItems,
+            serverUrl: api._serverUrl,
+            userId: api._userId,
+            timestamp: Date.now()
+        });
+
+        log.info('Homepage data cached for instant back-navigation');
     }
 
     // =========================================================================

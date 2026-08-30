@@ -1,5 +1,5 @@
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+import { osdIcons } from '../../utils/Icons.js';
 import { logger } from '../../utils/Logger.js';
 import { i18n } from '../../utils/i18n.js';
 
@@ -9,10 +9,17 @@ export default class AspectRatioMenu extends BaseMenu {
     constructor(osdController) {
         super(osdController);
         this.isModal = true;
+        // ====================================================================
+        // Menu Option Definitions
+        // ====================================================================
+        // We define the supported aspect ratios here. Notice we now reference the 
+        // unified osdIcons.aspectRatio and osdIcons.zoomIn properties directly.
+        // The display transition between outline and filled states is handled 
+        // dynamically via CSS rules rather than code-level string swaps.
         this.options = [
-            { id: 'auto', label: i18n.t('Auto'), key: 'Auto', icon: ICONS.aspectRatio },
-            { id: 'zoom', label: i18n.t('Zoom'), key: 'Zoom', icon: ICONS.zoomIn },
-            { id: 'stretch', label: i18n.t('Stretch'), key: 'Stretch', icon: ICONS.aspectRatio } // Reusing icon for now
+            { id: 'auto', label: i18n.t('Auto'), key: 'Auto' },
+            { id: 'zoom', label: i18n.t('Zoom'), key: 'Zoom' },
+            { id: 'stretch', label: i18n.t('Stretch'), key: 'Stretch' } // Reusing icon for now
         ];
     }
 
@@ -31,7 +38,7 @@ export default class AspectRatioMenu extends BaseMenu {
 
     show() {
         // Capture focus context
-        this._prevFocus = this.osd._getFocused(); 
+        this._prevFocus = this.osd._getFocused();
         this._prevRow = this.osd._currentFocusRow;
         this._prevIndex = this.osd._currentFocusIndex;
 
@@ -55,6 +62,19 @@ export default class AspectRatioMenu extends BaseMenu {
             this.osd._currentFocusRow = this._prevRow;
             this.osd._currentFocusIndex = this._prevIndex;
             this.osd._updateFocus();
+
+            /*
+             * Lock out enter/click inputs for 350ms to absorb any ghost key presses
+             * or trailing clicks on the newly focused parent button on the OSD.
+             */
+            this.osd._focusRestoreLockout = true;
+            if (this.osd._focusRestoreLockoutTimer) {
+                clearTimeout(this.osd._focusRestoreLockoutTimer);
+            }
+            this.osd._focusRestoreLockoutTimer = setTimeout(() => {
+                this.osd._focusRestoreLockout = false;
+                this.osd._focusRestoreLockoutTimer = null;
+            }, 350);
         }
     }
 
@@ -73,14 +93,18 @@ export default class AspectRatioMenu extends BaseMenu {
 
         const current = this.osd.player.getAspectRatio();
 
+        // ====================================================================
+        // Build Aspect Ratio Options HTML List
+        // ====================================================================
+        // Maps options to layout templates. The active selection gets a checkmark icon.
+        // We reference the unified osdIcons.check icon instead of checkOutline.
         const optionsHtml = this.options.map((opt, i) => {
             const isSelected = opt.id === current;
-            const checkIcon = isSelected ? ICONS.check : '';
-            
+            const checkIcon = isSelected ? osdIcons.check : '';
+
             return `
             <button class="track-option track-item ${isSelected ? 'selected' : ''}" 
                     data-id="${opt.id}" data-menu-index="${i}">
-                <span class="track-option-icon">${opt.icon || ''}</span>
                 <span class="track-option-label" data-i18n="${opt.key}">${opt.label}</span>
                 <span class="track-option-check">${checkIcon}</span>
             </button>
@@ -99,6 +123,19 @@ export default class AspectRatioMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * Discard synthetic focus-clicks and Enter-synthesized clicks (detail === 0
+                 * or clientX === 0 && clientY === 0). D-pad Enter is handled exclusively
+                 * via handleKey() -> handleEnter().
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
+
                 this.focusIndex = parseInt(btn.dataset.menuIndex);
                 this.handleEnter();
             });
@@ -126,7 +163,8 @@ export default class AspectRatioMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
-                return true; // Click handled by click listener
+                this.handleEnter();
+                return true;
             case 'back':
             case 'left':
             case 'right':
@@ -154,7 +192,9 @@ export default class AspectRatioMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });

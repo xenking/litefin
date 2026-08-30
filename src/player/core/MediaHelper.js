@@ -13,6 +13,7 @@
 
 import { storage } from '../../utils/StorageService.js';
 import { platformInfo } from '../../utils/PlatformInfo.js';
+import { state } from '../../core/StateManager.js';
 
 export const MediaHelper = {
     /**
@@ -39,6 +40,15 @@ export const MediaHelper = {
             forceServerSelectedAudio,
             forceVideoCopyHlsVariant
         } = options;
+
+        /*
+         * Dynamically select the token query parameter key name.
+         * Emby does not return a 'ProductName' in its public (unauthenticated)
+         * System Info response, whereas Jellyfin does.
+         */
+        const serverInfo = state.get('server:info') || {};
+        const isEmbyInstance = !!(serverInfo.ServerName && (!serverInfo.ProductName || serverInfo.ProductName.toLowerCase().includes('emby')));
+        const authKey = isEmbyInstance ? 'api_key' : 'ApiKey';
 
         // Determine play method
         const playMethod = this.getPlayMethod(mediaSource);
@@ -115,7 +125,7 @@ export const MediaHelper = {
                     if (mediaSource.LiveStreamId) {
                         url += `&LiveStreamId=${encodeURIComponent(mediaSource.LiveStreamId)}`;
                     }
-                    url += `&api_key=${encodeURIComponent(authToken)}`;
+                    url += `&${authKey}=${encodeURIComponent(authToken)}`;
                     if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
                         url += `&AudioStreamIndex=${audioStreamIndex}`;
                     }
@@ -134,7 +144,7 @@ export const MediaHelper = {
                     if (mediaSource.LiveStreamId) {
                         url += `&LiveStreamId=${encodeURIComponent(mediaSource.LiveStreamId)}`;
                     }
-                    url += `&api_key=${encodeURIComponent(authToken)}`;
+                    url += `&${authKey}=${encodeURIComponent(authToken)}`;
                     isHls = true;
                 }
 
@@ -169,7 +179,7 @@ export const MediaHelper = {
                 url = `${serverUrl}/Videos/${itemId}/stream.${mediaSource.Container}`;
                 url += needsServerSelectedAudioStream ? `?Static=false` : `?Static=true`;
                 url += `&mediaSourceId=${encodeURIComponent(mediaSource.Id)}`;
-                url += `&api_key=${encodeURIComponent(authToken)}`;
+                url += `&${authKey}=${encodeURIComponent(authToken)}`;
                 if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
                     url += `&AudioStreamIndex=${audioStreamIndex}`;
                 }
@@ -193,7 +203,7 @@ export const MediaHelper = {
                 url = `${serverUrl}/Videos/${itemId}/master.m3u8`;
                 url += `?mediaSourceId=${encodeURIComponent(mediaSource.Id)}`;
                 url += `&PlaySessionId=${encodeURIComponent(playSessionId)}`;
-                url += `&api_key=${encodeURIComponent(authToken)}`;
+                url += `&${authKey}=${encodeURIComponent(authToken)}`;
                 url += `&StartTimeTicks=${startPositionTicks || 0}`;
                 if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
                     url += `&AudioStreamIndex=${audioStreamIndex}`;
@@ -413,12 +423,21 @@ export const MediaHelper = {
      * @param {string} serverUrl   - Jellyfin server base URL (e.g. http://host:8096)
      * @param {string} itemId      - Item ID (unused, kept for backward-compat signature)
      * @param {string} mediaSourceId - Media source ID (unused, kept for backward-compat)
-     * @param {string} authToken   - Authentication token for the api_key query param
+     * @param {string} authToken   - Authentication token for the ApiKey query param
      * @param {string} [format]    - If provided, overrides the extension in the DeliveryUrl
      *                               (e.g. 'vtt').  If omitted the DeliveryUrl is used as-is.
      * @returns {string} Fully-qualified subtitle URL including auth token
      */
     getSubtitleUrl(track, serverUrl, itemId, mediaSourceId, authToken, format) {
+        /*
+         * Dynamically select the token query parameter key name.
+         * Emby does not return a 'ProductName' in its public (unauthenticated)
+         * System Info response, whereas Jellyfin does.
+         */
+        const serverInfo = state.get('server:info') || {};
+        const isEmbyInstance = !!(serverInfo.ServerName && (!serverInfo.ProductName || serverInfo.ProductName.toLowerCase().includes('emby')));
+        const authKey = isEmbyInstance ? 'api_key' : 'ApiKey';
+
         // ====================================================================
         // External URL tracks (e.g. HTTP/HTTPS subtitles hosted elsewhere)
         // have no server-relative DeliveryUrl — use their URL directly.
@@ -449,7 +468,30 @@ export const MediaHelper = {
             const format_  = format || codec;            // honour caller's override
             deliveryPath = `/Videos/${itemId}/${mediaSourceId}/Subtitles/${track.Index}/0/Stream.${format_}`;
             const sep = '?';
-            return `${serverUrl}${deliveryPath}${sep}api_key=${encodeURIComponent(authToken)}`;
+            return `${serverUrl}${deliveryPath}${sep}${authKey}=${encodeURIComponent(authToken)}`;
+        }
+
+        // ====================================================================
+        // Filesystem path guard for external subtitle files.
+        //
+        // When a subtitle track is external (IsExternal = true), Jellyfin may
+        // set DeliveryUrl to the server's local filesystem path (e.g.
+        // "/Volumes/Storage/movie.srt"). This path is not accessible from the
+        // client — we must stream the subtitle through the server's subtitle
+        // API endpoint instead.
+        //
+        // We detect this by checking that the DeliveryUrl is neither an HTTP
+        // URL nor a server-relative API path under /Videos/ or /Audio/.
+        // ====================================================================
+        if (
+            deliveryPath.startsWith('/') &&
+            !deliveryPath.startsWith('/Videos/') &&
+            !deliveryPath.startsWith('/Audio/')
+        ) {
+            const codec = (track.Codec || 'subrip').toLowerCase();
+            const format_ = format || codec;
+            deliveryPath = `/Videos/${itemId}/${mediaSourceId}/Subtitles/${track.Index}/0/Stream.${format_}`;
+            return `${serverUrl}${deliveryPath}?${authKey}=${encodeURIComponent(authToken)}`;
         }
 
         // Ensure it's a fully-qualified URL (DeliveryUrl is usually root-relative)
@@ -464,9 +506,11 @@ export const MediaHelper = {
                      .replace(/\.\w+$/, `.${format}`);      // or at end of string
         }
 
-        // Append auth token (DeliveryUrl itself usually omits it)
-        const separator = url.includes('?') ? '&' : '?';
-        url += `${separator}api_key=${encodeURIComponent(authToken)}`;
+        // Append auth token only if the DeliveryUrl doesn't already include one.
+        if (!url.includes(authKey + '=')) {
+            const separator = url.includes('?') ? '&' : '?';
+            url += `${separator}${authKey}=${encodeURIComponent(authToken)}`;
+        }
 
         return url;
     },

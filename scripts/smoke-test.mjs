@@ -95,7 +95,12 @@ try {
             userAgent: 'Mozilla/5.0 (WebOS; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.270 Safari/537.36 WebAppManager'
         }),
         pretendToBeVisual: true,
-        virtualConsole
+        virtualConsole,
+        beforeParse(window) {
+            window.TextMetrics = class TextMetrics {};
+            window.CSS = window.CSS || {};
+            window.HTMLCanvasElement.prototype.getContext = () => ({});
+        },
     });
 } catch (err) {
     process.stderr.write(`[JSDOM init] ${err.constructor?.name}: ${err.message || '(empty message)'}\n${err.stack || ''}\n`);

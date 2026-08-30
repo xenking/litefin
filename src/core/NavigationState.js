@@ -11,7 +11,12 @@
  */
 
 import { focusManager } from '../ui/FocusManager.js';
+// ============================================================================
+// ScrollController integration for unified native / GPU-accelerated scrolling
+// ============================================================================
+import { scrollController } from '../ui/ScrollController.js';
 import { logger } from '../utils/Logger.js';
+import { storage } from '../utils/StorageService.js';
 
 const log = logger.create('NavigationState');
 
@@ -31,8 +36,13 @@ class NavigationState {
         // Find the main scroll container
         const scrollContainer = this._getScrollContainer(pageInstance);
 
-        let focusedEl = focusManager.getFocused();
-        let sectionName = focusManager.getSectionForElement(focusedEl);
+        let focusedEl = null;
+        let sectionName = null;
+
+        if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+            focusedEl = focusManager.getFocused();
+            sectionName = focusManager.getSectionForElement(focusedEl);
+        }
 
         // If the user is navigating via the sidebar, their focus is currently on the sidebar block.
         // We actually want to capture what they were focused on IN THE PAGE before they moved
@@ -50,8 +60,15 @@ class NavigationState {
         }
 
         const state = {
+            // ================================================================
             // Scroll position
-            scrollTop: scrollContainer ? scrollContainer.scrollTop : 0,
+            // ================================================================
+            // Rather than reading scrollContainer.scrollTop directly (which is
+            // always 0 when in GPU-accelerated composite layout mode), we route
+            // the read through ScrollController.getVerticalScroll. This resolves
+            // the correct translation offset dynamically if GPU scroll is active.
+            // ================================================================
+            scrollTop: scrollContainer ? scrollController.getVerticalScroll(scrollContainer) : 0,
             scrollLeft: scrollContainer ? scrollContainer.scrollLeft : 0,
 
             // Focus position
@@ -129,14 +146,24 @@ class NavigationState {
      * @private
      */
     _doRestoreScrollFocus(pageInstance, state) {
+        if (storage.getItem('pref:disableFocusRestore') === 'true') return;
+
         if (this._debug) {
             log.debug('Executing scroll/focus restoration');
         }
 
+        // ====================================================================
         // Restore scroll position
+        // ====================================================================
+        // Under GPU-accelerated vertical scroll layout configurations, setting
+        // scrollContainer.scrollTop directly fails to shift the hardware layers
+        // and causes visual jumps. We use scrollController.smoothScrollTo with
+        // an animation duration of 0 to snap the compositor layers instantly
+        // to the saved scroll offset.
+        // ====================================================================
         const scrollContainer = this._getScrollContainer(pageInstance);
         if (scrollContainer && state.scrollTop > 0) {
-            scrollContainer.scrollTop = state.scrollTop;
+            scrollController.smoothScrollTo(scrollContainer, state.scrollTop, 0, 'vertical');
         }
         if (scrollContainer && state.scrollLeft > 0) {
             scrollContainer.scrollLeft = state.scrollLeft;

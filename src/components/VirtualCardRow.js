@@ -175,7 +175,7 @@ export class VirtualCardRow {
                     // =========================================================
                     // 🚀 ACTIVE SLIDING WINDOW BACKDROP PRELOADING
                     // =========================================================
-                    // To keep navigation feeling lightning fast and premium (Apple HIG style),
+                    // To keep navigation feeling lightning fast and premium ,
                     // we pre-fetch the next card's backdrop while focused on card N.
                     // This creates a 1-item ahead sliding buffer, so the subsequent
                     // expansion backdrop is completely ready before focus lands on it.
@@ -297,19 +297,65 @@ export class VirtualCardRow {
         }
 
         this.bufferZone = Math.floor(this.visibleCount / 2);
-        this.currentIndex = 0; // The index of the currently focused item relative to the array
+
+        // -------------------------------------------------------------
+        // Initialize focused index. If options.currentIndex is supplied
+        // (for centering rows on active cards), we seed it directly.
+        // -------------------------------------------------------------
+        this.currentIndex = options.currentIndex !== undefined ? options.currentIndex : 0;
 
         this.domNodes = new Map(); // Maps index -> HTMLElement
 
+        // -------------------------------------------------------------
         // Render the initial block.
-        // If an initialWindow was requested, temporarily widen visibleCount so
-        // _updateWindow builds the full initial set of DOM nodes in one pass.
-        // The flag is cleared on the next _updateWindow call so the normal
-        // sliding window takes over transparently from that point.
-        if (this._initialWindow != null) {
+        // If an initialWindow was requested and we are loading at the very
+        // first item (index 0), we temporarily enable boot-render to build
+        // the initial eager set of DOM nodes in one pass.
+        //
+        // However, if we are loading at a non-zero focused index (e.g. pre-scrolled
+        // to a specific episode details card), we MUST bypass boot-render.
+        // This ensures the normal sliding window centers on the active card and
+        // automatically appends and force-loads the correct visible card elements
+        // in the viewport instead of keeping them empty.
+        // -------------------------------------------------------------
+        if (this._initialWindow != null && this.currentIndex === 0) {
             this._isBootRender = true;
         }
-        this._updateWindow(0);
+        this._updateWindow(this.currentIndex);
+
+        // -------------------------------------------------------------
+        // Align scroll position instantly to center on the initial focused index
+        // to prevent visual layout jumps on first load.
+        // -------------------------------------------------------------
+        if (this.currentIndex > 0) {
+            const isRtl = document.documentElement.dir === 'rtl';
+            const elementPos = this.getItemPosition(this.currentIndex);
+            const canExpand = isModern && !this.isLandscape && this.cardType !== 'square' && this.cardType !== 'artist';
+            const elementWidth = canExpand ? Math.round(600 * (this.modernMultiplier || 1.0)) : this.itemWidth;
+
+            // Read container width from parent element, fallback to viewport width
+            const containerWidth = this.track.parentElement ? this.track.parentElement.clientWidth : window.innerWidth;
+            const targetScroll = elementPos - containerWidth / 2 + elementWidth / 2;
+            const maxScroll = Math.max(0, this.getTrackWidth() - containerWidth);
+            const finalScrollLeft = Math.max(0, Math.min(targetScroll, maxScroll));
+
+            // Apply coordinates instantly without animation transitions
+            this.track.style.transition = 'none';
+            this.track.style.webkitTransition = 'none';
+
+            const transformValue = isRtl
+                ? `translate3d(${finalScrollLeft}px, 0, 0)`
+                : `translate3d(-${finalScrollLeft}px, 0, 0)`;
+
+            this.track.style.webkitTransform = transformValue;
+            this.track.style.transform = transformValue;
+
+            // Restore transition property asynchronously on next animation frame
+            requestAnimationFrame(() => {
+                this.track.style.webkitTransition = '';
+                this.track.style.transition = '';
+            });
+        }
 
         // =================================================================
         // 💎 STARTUP BACKDROP CACHING
@@ -317,7 +363,6 @@ export class VirtualCardRow {
         // Eagerly preloads the backdrops for index 0 and index 1 on startup.
         // This ensures the current row has at least 2 backdrops cached
         // immediately when the page loads, giving a gorgeous, lag-free first
-        // impression exactly matching the Apple HIG standard.
         // =================================================================
         if (isModern) {
             // Retrieve the first card (index 0) and preload its backdrop
@@ -454,8 +499,13 @@ export class VirtualCardRow {
 
             for (let i = start; i <= end; i++) {
                 if (!this.domNodes.has(i)) {
+                    // -----------------------------------------------------------------
+                    // Safely extract HTML representation from renderCard
+                    // Handles potential null/undefined returns gracefully in legacy engines
+                    // -----------------------------------------------------------------
                     const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = this.renderCard(this.items[i]).trim();
+                    const cardHtml = this.renderCard(this.items[i]);
+                    tempDiv.innerHTML = (cardHtml || '').trim();
                     const cardNode = tempDiv.firstElementChild;
                     if (cardNode) {
                         const leftPos = this.sidePadding + i * this.totalItemWidth;
@@ -542,9 +592,13 @@ export class VirtualCardRow {
             if (!this.domNodes.has(i)) {
                 const itemData = this.items[i];
 
-                // Create a temporary container to extract the HTML string into a node
+                // -----------------------------------------------------------------
+                // Safely extract HTML representation from renderCard
+                // Ensures legacy JS engines never throw TypeError if card string is nullish
+                // -----------------------------------------------------------------
                 const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = this.renderCard(itemData).trim();
+                const cardHtml = this.renderCard(itemData);
+                tempDiv.innerHTML = (cardHtml || '').trim();
                 const cardNode = tempDiv.firstElementChild;
 
                 if (cardNode) {

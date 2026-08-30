@@ -28,9 +28,17 @@ export default class TrackMenu extends BaseMenu {
         this.show();
     }
 
+    /**
+     * Display the track menu overlay.
+     * Preserves the initial OSD focus row and index so that closing the menu
+     * restores control to the original trigger button, even if mode switching occurs.
+     */
     show() {
-        this._prevRow = this.osd._currentFocusRow;
-        this._prevIndex = this.osd._currentFocusIndex;
+        // Only capture initial OSD focus row/index when menu first becomes visible
+        if (!this.isVisible) {
+            this._prevRow = this.osd._currentFocusRow;
+            this._prevIndex = this.osd._currentFocusIndex;
+        }
 
         this.isVisible = true;
         if (this.$el) {
@@ -39,6 +47,9 @@ export default class TrackMenu extends BaseMenu {
         }
     }
 
+    /**
+     * Hide the track menu overlay and return focus to the OSD controls.
+     */
     hide() {
         this.isVisible = false;
         if (this.$el) {
@@ -90,6 +101,7 @@ export default class TrackMenu extends BaseMenu {
             currentIndex = this.osd.currentAudioIndex;
         }
 
+
         // Ensure currentIndex is a number for comparison
         currentIndex = parseInt(currentIndex);
         if (isNaN(currentIndex)) currentIndex = -1;
@@ -130,8 +142,22 @@ export default class TrackMenu extends BaseMenu {
                 `;
             }
 
+            // For audio tracks, check if the codec is natively playable by the
+            // current backend. Unsupported tracks (e.g. FLAC in MKV on HTML5)
+            // get a visual indicator showing they'll require a transcode restart.
+            let isUnsupported = false;
+            if (this.type === 'audio' && track.Index !== -1) {
+                isUnsupported = player.isAudioTrackNativelyPlayable
+                    ? !player.isAudioTrackNativelyPlayable(track)
+                    : false;
+
+                if (isUnsupported) {
+                    metadataHtml += `<span class="track-badge track-badge-unsupported">${i18n.t('Transcode') || 'TRANSCODE'}</span>`;
+                }
+            }
+
             return `
-                <button class="track-option track-item ${isSelected ? 'selected' : ''}" data-index="${track.Index}" data-menu-index="${i}">
+                <button class="track-option track-item ${isSelected ? 'selected' : ''} ${isUnsupported ? 'track-unsupported' : ''}" data-index="${track.Index}">
                     <span class="track-option-check"><svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></span>
                     <span class="track-option-label">
                         <span class="track-label-text">${label}</span>
@@ -154,6 +180,26 @@ export default class TrackMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * On Tizen Samsung TVs, two types of synthetic click events can
+                 * fire on a focused <button> without a real pointer interaction:
+                 *
+                 *   1. Focus-click: .focus() fires an immediate click on the element.
+                 *   2. Enter-click: Pressing OK/Enter fires a click at (0, 0) with
+                 *      detail === 0.
+                 *
+                 * Both must be discarded. Only clicks from the Magic Remote cursor
+                 * (real pointer device, detail >= 1, non-zero coordinates) should
+                 * be processed here. D-pad Enter is handled exclusively through the
+                 * handleKey() → handleEnter() path to avoid double-execution.
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return; // Enter-synthesized click, not a real pointer
+                if (e.clientX === 0 && e.clientY === 0) return; // TV platform fallback guard
                 this.selectTrack(parseInt(btn.dataset.index, 10));
             });
         });
@@ -162,6 +208,10 @@ export default class TrackMenu extends BaseMenu {
         if (switchBtn) {
             switchBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                // Same double-fire guard as .track-item above
+                if (switchBtn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
                 this.switchMode();
             });
         }
@@ -169,8 +219,22 @@ export default class TrackMenu extends BaseMenu {
         this.updateFocus();
     }
 
+    /**
+     * Handle directional and selection key events within the track menu.
+     * 
+     * Aligning with Apple Human Interface Guidelines:
+     * - UP/DOWN cycles focus within available menu items smoothly.
+     * - In sub-menus (Secondary Subtitles), BACK/LEFT/RIGHT returns cleanly to the parent level
+     *   (Primary Subtitles) rather than unexpectedly closing the menu to the main OSD.
+     * - ENTER activates the focused track or sub-menu toggle.
+     *
+     * @param {string} key - Directional or action key string ('up', 'down', 'enter', 'back', 'left', 'right')
+     * @returns {boolean} True if key was handled
+     */
     handleKey(key) {
         const options = this.$el?.querySelectorAll('.track-option') || [];
+        if (!options.length) return false;
+
         switch (key) {
             case 'up':
                 if (this.focusIndex > 0) {
@@ -189,16 +253,31 @@ export default class TrackMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
-                // Rely on native click event which is triggered by the browser on Enter
-                // The buttons have 'click' event listeners attached in render()
+                this.handleEnter();
                 return true;
             case 'back':
             case 'left':
             case 'right':
+                // Sub-menu back navigation: returning from secondary subtitles level
+                // goes back to primary subtitles track selection menu.
+                if (this.type === 'subtitles' && this.mode === 'secondary') {
+                    this.switchMode();
+                    return true;
+                }
                 this.osd.closeMenu();
                 return true;
         }
         return false;
+    }
+
+    handleEnter() {
+        if (this.type === 'subtitles' && this.focusIndex === 0) {
+            this.switchMode();
+            return;
+        }
+
+        const option = this.$el.querySelectorAll('.track-option')[this.focusIndex];
+        this.selectTrack(parseInt(option.dataset.index, 10));
     }
 
     switchMode() {
@@ -233,7 +312,27 @@ export default class TrackMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                /*
+                 * ================================================================
+                 * TIZEN PHANTOM CLICK GUARD
+                 * ================================================================
+                 * On Samsung Tizen TVs, calling element.focus() on a <button>
+                 * fires a synthetic click event immediately, even though no key
+                 * was pressed. This is a platform-level quirk that causes the
+                 * focused button's click listener to fire on every D-pad move.
+                 *
+                 * The guard works by setting a transient flag on the element
+                 * BEFORE calling .focus(), and then ignoring click events in the
+                 * listener when that flag is present. The flag is cleared on a
+                 * zero-delay timeout so only the synthetic focus-click is blocked;
+                 * genuine Enter-key clicks (which arrive on a later event loop
+                 * tick) are processed normally.
+                 * ================================================================
+                 */
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
+
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });

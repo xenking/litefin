@@ -1,7 +1,16 @@
+// Base class providing overlay modal logic and key handlers for generic player menus.
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+
+// Centralized icon resource definitions to display outlines and filled vectors.
+import { osdIcons } from '../../utils/Icons.js';
+
+// Logger interface to stream diagnostic information concerning settings state.
 import { logger } from '../../utils/Logger.js';
+
+// Global local configurations and persistent user storage mapping.
 import { PlayerSettings } from '../../utils/PlayerSettings.js';
+
+// Direct internationalization API to dynamically translate strings.
 import { i18n } from '../../utils/i18n.js';
 
 const log = logger.create('QualityMenu');
@@ -46,7 +55,12 @@ export default class QualityMenu extends BaseMenu {
         const margin = 100000; // 100kbps margin
         const limit = (sourceBitrate || Infinity) + margin;
 
-        const options = [{ id: 0, label: i18n.t('Auto'), icon: ICONS.auto || ICONS.check }];
+        // ====================================================================
+        // Default Option Mapping
+        // ====================================================================
+        // Establish primary auto mode fallback setting index 0 at top of selection.
+        // We reference the unified osdIcons.check icon directly.
+        const options = [{ id: 0, label: i18n.t('Auto'), icon: osdIcons.check }];
         
         this.bitrates.forEach(b => {
             if (b.val <= limit) {
@@ -109,6 +123,19 @@ export default class QualityMenu extends BaseMenu {
             this.osd._currentFocusRow = this._prevRow;
             this.osd._currentFocusIndex = this._prevIndex;
             this.osd._updateFocus();
+
+            /*
+             * Lock out enter/click inputs for 350ms to absorb any ghost key presses
+             * or trailing clicks on the newly focused parent button on the OSD.
+             */
+            this.osd._focusRestoreLockout = true;
+            if (this.osd._focusRestoreLockoutTimer) {
+                clearTimeout(this.osd._focusRestoreLockoutTimer);
+            }
+            this.osd._focusRestoreLockoutTimer = setTimeout(() => {
+                this.osd._focusRestoreLockout = false;
+                this.osd._focusRestoreLockoutTimer = null;
+            }, 350);
         }
     }
 
@@ -126,7 +153,6 @@ export default class QualityMenu extends BaseMenu {
         }
 
         // Get current setting to show checkmark
-        // Get current setting to show checkmark
         const player = this.osd.player;
         let currentMaxBitrate = player.getMaxBitrate() || 0;
 
@@ -137,9 +163,16 @@ export default class QualityMenu extends BaseMenu {
             currentMaxBitrate = 0;
         }
 
+        // Construct layout elements representing active bandwidth settings.
         const optionsHtml = this.validOptions.map((opt, i) => {
+            // Assess selection matches comparing option item to current bitrate.
             const isSelected = opt.id === currentMaxBitrate;
-            const checkIcon = isSelected ? ICONS.check : '';
+            
+            // ================================================================
+            // Dynamic Selection Mark
+            // ================================================================
+            // Assign unified check icon element to identify selected list values.
+            const checkIcon = isSelected ? osdIcons.check : '';
             
             // User requested: Auto = Direct Play, Lower = Transcoding
             const secondaryLabel = opt.id === 0 ? i18n.t('DirectPlay') : i18n.t('Transcoding');
@@ -182,6 +215,19 @@ export default class QualityMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * Discard synthetic focus-clicks and Enter-synthesized clicks (detail === 0
+                 * or clientX === 0 && clientY === 0). D-pad Enter is handled exclusively
+                 * via handleKey() -> handleEnter().
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
+
                 this.focusIndex = parseInt(btn.dataset.menuIndex);
                 this.handleEnter();
             });
@@ -209,7 +255,8 @@ export default class QualityMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
-                return true; // Click handled by click listener
+                this.handleEnter();
+                return true;
             case 'back':
             case 'left':
             case 'right':
@@ -237,7 +284,9 @@ export default class QualityMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });

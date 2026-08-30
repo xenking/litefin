@@ -8,13 +8,61 @@
    CSS Variables
    ============================================================================ */
 
+.player-osd {
+    /* OSD specific button variables with fallback inheritance to global button variables */
+    --jf-osd-btn-bg: var(--jf-btn-primary-bg);
+    --jf-osd-btn-color: var(--jf-btn-primary-color);
+    --jf-osd-btn-border: var(--jf-btn-primary-border);
+    --jf-osd-btn-focus-bg: var(--jf-btn-primary-bg); /* Align focused button color with primary accent background */
+    --jf-osd-btn-focus-color: var(--jf-btn-primary-color);
+    --jf-osd-btn-focus-border: var(--jf-btn-primary-focus-border);
+    --jf-osd-btn-hover-border: var(--jf-btn-primary-hover-border);
+}
+
 :root {
     --osd-text-color: var(--jf-text-primary, #fff);
     --osd-accent-color: var(--jf-accent);
-    --osd-gradient-dark: rgba(0, 0, 0, 0.75);
+    --osd-gradient-opacity: 0.75;
+    --osd-gradient-dark: rgba(0, 0, 0, 1);
     --osd-slider-bg: rgba(255, 255, 255, 0.3);
-    --osd-slider-progress: var(--jf-accent);
+    --osd-slider-progress: var(--jf-btn-primary-bg);
     --osd-btn-hover: var(--jf-button-hover, rgba(255, 255, 255, 0.1));
+    /* Fallback value for customized seek bar thumb background */
+    --osd-thumb-bg: #ffffff;
+}
+
+/* 
+ * ── OSD Seek Bar Custom Thumb Color Options ────────────────────────────────
+ * Maps document element attributes to selected theme/monochrome options.
+ */
+html[data-osd-thumb-color="white"] {
+    --osd-thumb-bg: #ffffff;
+}
+html[data-osd-thumb-color="black"] {
+    --osd-thumb-bg: #000000;
+}
+html[data-osd-thumb-color="theme-accent"] {
+    --osd-thumb-bg: var(--jf-btn-primary-bg);
+}
+html[data-osd-thumb-color="theme-inverted"] {
+    --osd-thumb-bg: var(--jf-btn-primary-focus-bg);
+}
+
+/* 
+ * ── OSD Seek Bar Custom Progress Color Options ─────────────────────────────
+ * Maps document element attributes to selected theme/monochrome options.
+ */
+html[data-osd-progress-color="white"] {
+    --osd-slider-progress: #ffffff;
+}
+html[data-osd-progress-color="black"] {
+    --osd-slider-progress: #000000;
+}
+html[data-osd-progress-color="theme-accent"] {
+    --osd-slider-progress: var(--jf-btn-primary-bg);
+}
+html[data-osd-progress-color="theme-inverted"] {
+    --osd-slider-progress: var(--jf-btn-primary-focus-bg);
 }
 
 /* ============================================================================
@@ -102,7 +150,6 @@
     top: 0;
     left: 0;
     right: 0;
-    background: linear-gradient(180deg, var(--osd-gradient-dark) 0%, rgba(0, 0, 0, 0) 100%);
     padding: 2.4em 2.4em 4.8em;
     /* 2em*1.2, 4em*1.2 */
     display: -webkit-box;
@@ -111,6 +158,20 @@
     justify-content: space-between;
     -webkit-box-align: center;
     align-items: center;
+    z-index: 1;
+}
+
+.osd-header::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(180deg, var(--osd-gradient-dark) 0%, rgba(0, 0, 0, 0) 100%);
+    opacity: var(--osd-gradient-opacity, 0.75);
+    z-index: -1;
+    pointer-events: none;
 }
 
 .osd-header-left {
@@ -172,7 +233,7 @@
 
 .osd-title-logo {
     object-fit: contain;
-    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+    /* PERFORMANCE: Rely on header gradient overlay for image contrast instead of heavy GPU filter: drop-shadow */
     /* Force Hardware acceleration */
     transform: translateZ(0);
     -webkit-transform: translateZ(0);
@@ -267,8 +328,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    background: linear-gradient(0deg, var(--osd-gradient-dark) 0%, rgba(0, 0, 0, 0) 100%);
-    padding: 6em 2.4em 3em;
+    padding: 10em 2.4em 3em;
     /* 5em*1.2, 2em*1.2, 2.5em*1.2 */
     display: -webkit-box;
     display: -webkit-flex;
@@ -277,10 +337,24 @@
     -webkit-box-direction: normal;
     -webkit-flex-direction: column;
     flex-direction: column;
+    z-index: 1;
+}
+
+.osd-bottom::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(0deg, var(--osd-gradient-dark) 0%, rgba(0, 0, 0, 0) 100%);
+    opacity: var(--osd-gradient-opacity, 0.75);
+    z-index: -1;
+    pointer-events: none;
 }
 
 .player-osd .osd-bottom > * + * {
-    margin-top: 1.8em;
+    margin-top: 1.0em;
 }
 
 /* Controls Row (above slider) */
@@ -319,7 +393,7 @@
 }
 
 .player-osd .osd-ends-at {
-    margin-left: 2.4em;
+    margin-left: 1.4em;
     /* Increased spacing to separate from buttons */
     font-size: 1.2em;
     /* 1em * 1.2 */
@@ -378,13 +452,10 @@ html[data-layout-tier="ultra-legacy"] .osd-btn .osd-icon {
 .osd-btn:focus,
 .osd-btn.focused,
 .osd-btn.magic-hover {
-    background: var(--jf-accent) !important;
-    color: var(--jf-primary-btn-color) !important;
+    /* Focus styles use high contrast solid accent colors */
+    background: var(--jf-osd-btn-focus-bg) !important;
+    color: var(--jf-osd-btn-focus-color) !important;
     outline: none !important;
-    -webkit-transform: scale(1.15);
-    transform: scale(1.15);
-    /* Promote only the focused/hovered button to its own compositor layer */
-    will-change: transform;
 }
 
 /* 
@@ -393,53 +464,32 @@ html[data-layout-tier="ultra-legacy"] .osd-btn .osd-icon {
  * ring around active player controls.
  */
 
-/* Auto/Default Focus Border */
-html:not([data-osd-borders]) .osd-btn:hover,
-html:not([data-osd-borders]) .osd-btn:focus,
-html:not([data-osd-borders]) .osd-btn.focused,
-html:not([data-osd-borders]) .osd-btn.magic-hover,
-html[data-osd-borders="auto"] .osd-btn:hover,
-html[data-osd-borders="auto"] .osd-btn:focus,
-html[data-osd-borders="auto"] .osd-btn.focused,
-html[data-osd-borders="auto"] .osd-btn.magic-hover {
-    border: 2px solid var(--jf-action-btn-active-border) !important;
+/* Focus border styles follow the global button customization settings (hover has no border) */
+.osd-btn:focus,
+.osd-btn.focused,
+.osd-btn.magic-hover,
+.osd-btn:hover {
+    border: 2px solid var(--jf-osd-btn-focus-border) !important;
 }
 
-/* Light Focus Border (Always White) */
-html[data-osd-borders="light"] .osd-btn:hover,
-html[data-osd-borders="light"] .osd-btn:focus,
-html[data-osd-borders="light"] .osd-btn.focused,
-html[data-osd-borders="light"] .osd-btn.magic-hover {
-    border: 2px solid rgba(255, 255, 255, 1) !important;
+/* Accent color for active toggle buttons when not focused */
+.osd-btn.active:not(#osdFavoriteBtn) {
+    color: var(--jf-osd-btn-bg) !important;
 }
 
-/* Dark Focus Border */
-html[data-osd-borders="dark"] .osd-btn:hover,
-html[data-osd-borders="dark"] .osd-btn:focus,
-html[data-osd-borders="dark"] .osd-btn.focused,
-html[data-osd-borders="dark"] .osd-btn.magic-hover {
-    border: 2px solid rgba(0, 0, 0, 0.5) !important;
+/* Active buttons when hovered get standard soft hover treatment */
+.osd-btn.active:not(#osdFavoriteBtn):hover {
+    background: var(--osd-btn-hover) !important;
+    color: var(--osd-text-color) !important;
 }
 
-/* Hidden Focus Border */
-html[data-osd-borders="hidden"] .osd-btn:hover,
-html[data-osd-borders="hidden"] .osd-btn:focus,
-html[data-osd-borders="hidden"] .osd-btn.focused,
-html[data-osd-borders="hidden"] .osd-btn.magic-hover {
-    border: none !important;
-}
-
-.osd-btn.active {
-    color: var(--osd-accent-color);
-}
-
-.osd-btn.active:hover,
-.osd-btn.active:focus,
-.osd-btn.active.focused,
-.osd-btn.active.magic-hover {
-    background: var(--jf-primary-btn-color) !important;
-    color: var(--osd-accent-color) !important;
-    border-color: var(--jf-primary-btn-color) !important;
+/* Active buttons when focused receive complete focus ring styling */
+.osd-btn.active:not(#osdFavoriteBtn):focus,
+.osd-btn.active:not(#osdFavoriteBtn).focused,
+.osd-btn.active:not(#osdFavoriteBtn).magic-hover {
+    background: var(--jf-osd-btn-focus-bg) !important;
+    color: var(--jf-osd-btn-focus-color) !important;
+    border-color: var(--jf-osd-btn-focus-border) !important;
 }
 
 /* Pulse Animation Trigger */
@@ -552,9 +602,9 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 
 .osd-back-btn:focus,
 .osd-back-btn.focused {
-    border: 2px solid var(--jf-action-btn-active-border) !important;
-    background: var(--osd-accent-color);
-    color: var(--jf-primary-btn-color);
+    border: 2px solid var(--jf-osd-btn-focus-border) !important;
+    background: var(--jf-osd-btn-focus-bg) !important;
+    color: var(--jf-osd-btn-focus-color) !important;
     outline: none !important;
 }
 
@@ -580,9 +630,9 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 
 .osd-btn-play:focus,
 .osd-btn-play.focused {
-    background: var(--osd-accent-color);
-    color: var(--jf-primary-btn-color) !important;
-    border: 2px solid var(--jf-action-btn-active-border)!important;
+    background: var(--jf-osd-btn-focus-bg) !important;
+    color: var(--jf-osd-btn-focus-color) !important;
+    border: 2px solid var(--jf-osd-btn-focus-border) !important;
 }
 
 .osd-btn-play .osd-icon {
@@ -622,14 +672,18 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     min-width: 5em;
     /* Enough for 00:00:00 with tabular-nums */
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    height: 36px; /* Match seek bar container height for perfect vertical centering */
+    line-height: 1;
 }
 
 .osd-time-current {
-    text-align: right;
+    justify-content: flex-start;
 }
 
 .osd-time-total {
-    text-align: left;
+    justify-content: flex-end;
 }
 
 .osd-slider-container {
@@ -647,8 +701,13 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 /* Seek Tooltip - Shows target time above seekbar during seeking */
 .osd-seek-tooltip {
     position: absolute;
-    top: -60px;
-    /* -50px * 1.2 */
+    /* 
+     * Anchor tooltip using bottom edge rather than fixed top pixel offset.
+     * This guarantees consistent vertical clearance above the seek thumb 
+     * across all TV screen resolutions and font rendering engines (including Tizen).
+     */
+    top: auto;
+    bottom: calc(100% + 14px);
     left: 50%;
     transform: translateX(-50%);
     background: var(--osd-gradient-dark, rgba(0, 0, 0, 0.9));
@@ -695,9 +754,7 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     /* Let content size the box; JS will set exact thumb dimensions */
     white-space: nowrap;
     padding: 8px 8px 12px;
-    /* Anchor tooltip so the bottom edge sits above the seekbar */
-    top: auto;
-    bottom: calc(100% + 12px);
+    /* Tooltip inherits bottom: calc(100% + 14px) from base class */
 }
 
 /*
@@ -780,10 +837,10 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     left: 0;
     top: 0;
     height: 100%;
-    background: var(--osd-accent-color);
+    background: var(--osd-slider-progress);
     width: 0%;
     /* border-radius removed to ensure it touches the thumb seamlessly */
-    box-shadow: 2px 0 0 var(--osd-accent-color); /* Bridge gap to thumb center */
+    box-shadow: 2px 0 0 var(--osd-slider-progress); /* Bridge gap to thumb center */
     pointer-events: none;
     transition: width 0.1s ease-out;
 }
@@ -818,11 +875,16 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 .menu-slider .osd-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    background: var(--jf-text-primary, #fff);
+    background: var(--osd-thumb-bg, var(--jf-text-primary, #fff));
     cursor: pointer;
     margin-top: 0 !important; /* Center on thin track when heights match */
     transition: height 0.1s, width 0.1s, margin-top 0.1s;
     border: none !important;
+}
+
+/* Ensure menu/settings sliders always use default text primary color, not OSD seekbar colors */
+.menu-slider .osd-slider::-webkit-slider-thumb {
+    background: var(--jf-text-primary, #fff) !important;
 }
 
 /* Player/Offset Thumbs (8px Track) */
@@ -856,7 +918,7 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     height: 28px !important;
     border-radius: var(--jf-border-radius) !important;
     margin-top: -10px !important;
-    background: #fff !important;
+    background: var(--osd-thumb-bg, #fff) !important;
 }
 
 /* Settings Focus (24px Thumb on 6px Track) */
@@ -897,7 +959,7 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 
 /* Focused button style */
 .osd-btn.focused {
-    background: var(--osd-accent-color);
+    background: var(--jf-osd-btn-focus-bg) !important;
     outline: none;
 }
 
@@ -930,7 +992,7 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 .track-menu {
     background: transparent;
     padding: 1.8em;
-    min-width: 600px;
+    min-width: 750px;
     max-width: 90vw;
     max-height: 70vh;
     overflow-y: auto;
@@ -980,9 +1042,10 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     background: rgba(255, 255, 255, 0.1);
 }
 
+/* Focused State: Use customizable focus background and contrast text colors */
 .track-option.focused {
-    background: var(--osd-accent-color);
-    color: var(--jf-primary-btn-color, #ffffff);
+    background: var(--jf-btn-primary-focus-bg) !important;
+    color: var(--jf-btn-primary-focus-color) !important;
 }
 
 .track-option-check {
@@ -997,6 +1060,30 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
     opacity: 1;
 }
 
+/* ── Unsupported Audio Track Styling ──────────────────────────────────────
+ * Audio tracks that cannot be decoded natively by the current backend
+ * (e.g. FLAC in MKV on HTML5 browsers) are visually dimmed. Selecting
+ * them still works — it triggers a server-side transcode restart — but
+ * the reduced opacity communicates that switching will be slower.
+ * ────────────────────────────────────────────────────────────────────── */
+.track-option.track-unsupported {
+    opacity: 0.45;
+}
+
+/* Restore full opacity on focus/hover so the dimmed track is still readable */
+.track-option.track-unsupported.focused,
+.track-option.track-unsupported:hover {
+    opacity: 0.7;
+}
+
+/* Distinct badge color for the "TRANSCODE" indicator on unsupported tracks */
+.track-badge-unsupported {
+    background: rgba(255, 160, 0, 0.25) !important;
+    color: rgb(255, 180, 60) !important;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 .track-option-icon {
     width: 28.8px;
     /* 24px * 1.2 */
@@ -1075,14 +1162,6 @@ html[data-osd-borders="hidden"] .osd-btn.magic-hover {
 
 #debug-overlay .log-info {
     color: #fff;
-}
-
-/* ============================================================================
-   Subtitle Quick Settings Layout Fixes
-   ============================================================================ */
-
-.subtitle-settings-menu {
-    min-width: 650px !important;
 }
 
 /* Internal layout for settings items within the standard .track-option */
@@ -1537,7 +1616,7 @@ body.lyrics-active .subtitle-overlay {
 }
 
 /* ============================================================================
-   SyncPlay Notification Overlay (Apple-Style)
+   SyncPlay Notification Overlay
    ============================================================================ */
 
 .osd-syncplay-notification {
@@ -1555,7 +1634,6 @@ body.lyrics-active .subtitle-overlay {
 }
 
 .osd-syncplay-notification-glass {
-    /* Sleek Apple-style frosted glass */
     background: rgba(30, 30, 30, 0.8);
 
     border: 1px solid rgba(255, 255, 255, 0.15);
@@ -1587,7 +1665,6 @@ body.lyrics-active .subtitle-overlay {
     width: 100%;
     height: 100%;
     fill: currentColor;
-    filter: drop-shadow(0 0 8px rgba(var(--jf-accent-rgb, 0, 164, 220), 0.6));
 }
 
 .osd-syncplay-notification-text {
@@ -1785,4 +1862,230 @@ html[data-layout-tier="ultra-legacy"] .osd-controls-left > *:not(.hidden),
 html[data-layout-tier="ultra-legacy"] .osd-controls-right > *:not(.hidden) {
     display: inline-block !important;
     vertical-align: middle;
+}
+
+/* ============================================================================
+   OSD Button and Menu Vector State Toggles (Outline vs Filled SVG)
+   ============================================================================ */
+
+/* Hide the filled SVG design path state by default inside OSD, overlays, and modals. */
+.player-osd .icon-filled,
+.track-menu-overlay .icon-filled,
+.playback-info-overlay .icon-filled,
+.osd-modal .icon-filled,
+.syncplay-overlay .icon-filled {
+    display: none !important;
+}
+
+/* Display the outline SVG design path state by default inside OSD, overlays, and modals. */
+.player-osd .icon-outline,
+.track-menu-overlay .icon-outline,
+.playback-info-overlay .icon-outline,
+.osd-modal .icon-outline,
+.syncplay-overlay .icon-outline {
+    display: inline-block !important;
+}
+
+/* Switch visibility when parent button or menu item is actively focused, hovered, selected, or active. */
+.player-osd .focusable.focused .icon-outline,
+.player-osd .focusable:focus .icon-outline,
+.track-menu-overlay .track-option.focused .icon-outline,
+.track-menu-overlay .track-option.selected .icon-outline,
+.player-osd .osd-btn.focused .icon-outline,
+.player-osd .osd-btn:focus .icon-outline,
+.player-osd .osd-btn:hover .icon-outline,
+.player-osd .osd-btn.magic-hover .icon-outline,
+.player-osd .osd-btn.active .icon-outline,
+.player-osd .osd-btn.syncplay-active .icon-outline,
+.syncplay-overlay .syncplay-group-item:focus .icon-outline,
+.syncplay-overlay .syncplay-group-item.focused .icon-outline {
+    display: none !important;
+}
+
+/* Make filled vector design active when focus, hover, or active states match. */
+.player-osd .focusable.focused .icon-filled,
+.player-osd .focusable:focus .icon-filled,
+.track-menu-overlay .track-option.focused .icon-filled,
+.track-menu-overlay .track-option.selected .icon-filled,
+.player-osd .osd-btn.focused .icon-filled,
+.player-osd .osd-btn:focus .icon-filled,
+.player-osd .osd-btn:hover .icon-filled,
+.player-osd .osd-btn.magic-hover .icon-filled,
+.player-osd .osd-btn.active .icon-filled,
+.player-osd .osd-btn.syncplay-active .icon-filled,
+.syncplay-overlay .syncplay-group-item:focus .icon-filled,
+.syncplay-overlay .syncplay-group-item.focused .icon-filled {
+    display: inline-block !important;
+}
+
+
+/* If button is NOT active (i.e. not favorited): hide all favorite SVGs */
+.osd-btn#osdFavoriteBtn:not(.active) .icon-favorite {
+    display: none !important;
+}
+
+/* If button IS active (i.e. favorited): hide all unfavorite SVGs */
+.osd-btn#osdFavoriteBtn.active .icon-unfavorite {
+    display: none !important;
+}
+
+/* When active but NOT focused, show State 3 (outline favorite) and hide State 4 (filled favorite) */
+.osd-btn#osdFavoriteBtn.active .icon-favorite.icon-outline {
+    display: inline-block !important;
+}
+.osd-btn#osdFavoriteBtn.active .icon-favorite.icon-filled {
+    display: none !important;
+}
+
+/* Hide outline and show filled for unfavorite icon when focused/hovered in inactive state */
+.osd-btn#osdFavoriteBtn:not(.active).focused .icon-unfavorite.icon-outline,
+.osd-btn#osdFavoriteBtn:not(.active):focus .icon-unfavorite.icon-outline,
+.osd-btn#osdFavoriteBtn:not(.active):hover .icon-unfavorite.icon-outline,
+.osd-btn#osdFavoriteBtn:not(.active).magic-hover .icon-unfavorite.icon-outline {
+    display: none !important;
+}
+.osd-btn#osdFavoriteBtn:not(.active).focused .icon-unfavorite.icon-filled,
+.osd-btn#osdFavoriteBtn:not(.active):focus .icon-unfavorite.icon-filled,
+.osd-btn#osdFavoriteBtn:not(.active):hover .icon-unfavorite.icon-filled,
+.osd-btn#osdFavoriteBtn:not(.active).magic-hover .icon-unfavorite.icon-filled {
+    display: inline-block !important;
+}
+
+/* Hide outline and show filled for favorite icon when focused/hovered in active state */
+.osd-btn#osdFavoriteBtn.active.focused .icon-favorite.icon-outline,
+.osd-btn#osdFavoriteBtn.active:focus .icon-favorite.icon-outline,
+.osd-btn#osdFavoriteBtn.active:hover .icon-favorite.icon-outline,
+.osd-btn#osdFavoriteBtn.active.magic-hover .icon-favorite.icon-outline {
+    display: none !important;
+}
+.osd-btn#osdFavoriteBtn.active.focused .icon-favorite.icon-filled,
+.osd-btn#osdFavoriteBtn.active:focus .icon-favorite.icon-filled,
+.osd-btn#osdFavoriteBtn.active:hover .icon-favorite.icon-filled,
+.osd-btn#osdFavoriteBtn.active.magic-hover .icon-favorite.icon-filled {
+    display: inline-block !important;
+}
+
+/* ============================================================================
+   OSD BUTTONS BELOW SEEKBAR LAYOUT
+   ============================================================================ */
+.osd-bottom.buttons-below {
+    display: flex;
+    flex-direction: column;
+}
+.osd-bottom.buttons-below .osd-controls-row {
+    order: 2;
+    margin-top: 1.0em !important;
+    margin-bottom: 0 !important;
+}
+.osd-bottom.buttons-below .osd-slider-row {
+    order: 1;
+    margin-top: 0 !important;
+}
+
+/* ============================================================================
+   OSD CENTERED LAYOUT
+   ============================================================================ */
+.osd-bottom.osd-layout-centered .osd-controls-row {
+    position: relative !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    min-height: 86.4px !important;
+}
+.osd-bottom.osd-layout-centered .osd-ends-at {
+    margin-left: 0.6em !important;
+}
+.osd-bottom.osd-layout-centered .osd-controls-left {
+    position: absolute !important;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+.osd-bottom.osd-layout-centered .osd-controls-right {
+    display: flex !important;
+    align-items: center !important;
+}
+.osd-bottom.osd-layout-centered .osd-spacer {
+    display: none !important;
+}
+
+/* ============================================================================
+   OSD HDR Darker White Overrides
+   ----------------------------------------------------------------------------
+   Overrides bright white text, headers, icons, and muted elements with dark grey (#a9a9a9).
+   Prevents eye strain in high-brightness HDR modes.
+   Note: --osd-slider-progress is intentionally preserved so user/theme seek bar colors remain untouched.
+   ============================================================================ */
+.player-osd.hdr-darker-white {
+    /* Mute default white text color variables for high dynamic range */
+    --osd-text-color: #a9a9a9 !important;
+    /* Soften seek bar thumb background handle */
+    --osd-thumb-bg: #a9a9a9 !important;
+    /* Mute primary container text fallback */
+    --jf-text-primary: #a9a9a9 !important;
+    /* Adjust unfilled track background to subtle dark grey */
+    --osd-slider-bg: rgba(169, 169, 169, 0.3) !important;
+}
+
+.player-osd.hdr-darker-white .osd-time,
+.player-osd.hdr-darker-white .osd-clock,
+.player-osd.hdr-darker-white .osd-title,
+.player-osd.hdr-darker-white .osd-title-secondary,
+.player-osd.hdr-darker-white .osd-ends-at,
+.player-osd.hdr-darker-white .osd-seek-tooltip-text,
+.player-osd.hdr-darker-white .chapters-modal__title,
+.player-osd.hdr-darker-white .chapters-modal__count,
+.player-osd.hdr-darker-white .queue-modal__title,
+.player-osd.hdr-darker-white .queue-modal__count,
+.player-osd.hdr-darker-white .chapter-row__name,
+.player-osd.hdr-darker-white .chapter-row__time,
+.player-osd.hdr-darker-white .queue-row__name,
+.player-osd.hdr-darker-white .queue-row__subtitle,
+.player-osd.hdr-darker-white .queue-row__number,
+.player-osd.hdr-darker-white .track-menu-title,
+.player-osd.hdr-darker-white .osd-modal-header h2,
+.player-osd.hdr-darker-white .lyrics-modal h2,
+.player-osd.hdr-darker-white .lyrics-line,
+.player-osd.hdr-darker-white .description-modal h2,
+.player-osd.hdr-darker-white .description-overview,
+.player-osd.hdr-darker-white .playback-info-title,
+.player-osd.hdr-darker-white .playback-info-value,
+.player-osd.hdr-darker-white .setting-name,
+.player-osd.hdr-darker-white .setting-description,
+.player-osd.hdr-darker-white .track-option:not(.focused):not(.selected),
+.player-osd.hdr-darker-white .osd-btn:not(:focus):not(.focused):not(.magic-hover):not(.active) {
+    color: #a9a9a9 !important;
+}
+
+.player-osd.hdr-darker-white .osd-btn:not(:focus):not(.focused):not(.magic-hover):not(.active) svg,
+.player-osd.hdr-darker-white .osd-btn:not(:focus):not(.focused):not(.magic-hover):not(.active) .osd-icon {
+    fill: #a9a9a9 !important;
+    color: #a9a9a9 !important;
+}
+
+/* HDR overrides for body-level track-menu-overlay elements
+   (track menus are appended to document.body, not inside .player-osd) */
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) {
+    color: #a9a9a9 !important;
+}
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) svg {
+    fill: #a9a9a9 !important;
+    color: #a9a9a9 !important;
+}
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) .track-badge {
+    color: #a9a9a9 !important;
+    border-color: rgba(169, 169, 169, 0.3) !important;
+    background: rgba(169, 169, 169, 0.1) !important;
+}
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) .track-option-secondary,
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) .track-badges,
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) .sub-setting-label,
+body.hdr-darker-white .track-menu-overlay .track-option:not(.focused):not(.selected) .sub-setting-value {
+    color: #a9a9a9 !important;
+}
+body.hdr-darker-white .track-menu-overlay .track-menu-title {
+    color: #a9a9a9 !important;
 }

@@ -16,8 +16,9 @@
  * @module core/ASSRenderer
  */
 
-import libjass from 'libjass';
 import 'libjass/libjass.css';
+import '../../utils/SvgPathPolyfills.js';
+import libjass from 'libjass';
 import { logger } from '../../utils/Logger.js';
 import { preProcessAssContent } from './AssStylePreprocessor.js';
 import { installSvgPathSegListPolyfill } from './SvgPathSegPolyfill.js';
@@ -83,8 +84,31 @@ export default class ASSRenderer {
         this._lastTickTime = 0;
         this._tickThrottleMs = 50;
 
+        // Whether to apply style modifications (font/outline/shadow overrides,
+        // dialogue stripping, and spacing offsets). Default off.
+        this._enableStyleMods = false;
+        this._prevEnableStyleMods = false;
+        // ASS rendering engine ('libjass' or 'libass-wasm'). Used to decide
+        // whether to inject PlayRes defaults (libjass needs them, libass-wasm doesn't).
+        this._preferredEngine = 'libjass';
+
         log.info('ASSRenderer initialized' +
             (this._isVirtual ? ' (AVPlay/ManualClock mode)' : ' (HTML5/VideoClock mode)'));
+    }
+
+    /**
+     * Configure whether ASS style modifications are enabled and which renderer
+     * engine is being used.
+     *
+     * @param {Object} config
+     * @param {boolean} [config.enableModifications=false] - Apply style overrides,
+     *        dialogue stripping, and spacing offsets.
+     * @param {string} [config.preferredEngine='libjass'] - 'libjass' or 'libass-wasm'.
+     */
+    setStyleConfig({ enableModifications, preferredEngine } = {}) {
+        this._enableStyleMods = enableModifications === true;
+        if (preferredEngine) this._preferredEngine = preferredEngine;
+        log.debug(`ASSRenderer style config: modifications=${this._enableStyleMods}, engine=${this._preferredEngine}`);
     }
 
     // ========================================================================
@@ -213,8 +237,18 @@ export default class ASSRenderer {
 
             log.info('ASS renderer created successfully');
         } catch (err) {
-            const errorMsg = err ? (err.name + ': ' + err.message + '\n' + err.stack) : err;
-            log.error('Failed to create ASS renderer:', errorMsg);
+            let errorMsg;
+            if (err instanceof Error) {
+                errorMsg = `${err.name}: ${err.message}\n${err.stack}`;
+            } else if (typeof err === 'object') {
+                errorMsg = JSON.stringify(err);
+            } else {
+                errorMsg = String(err);
+            }
+
+            const preview = content ? content.substring(0, 300).replace(/\r?\n/g, '\\n') : 'null/empty';
+            log.error(`Failed to create ASS renderer. Error: ${errorMsg}`);
+            log.error(`Content preview: ${preview}`);
             this.destroy();
             throw err;
         }
@@ -247,34 +281,92 @@ export default class ASSRenderer {
     _updateWrapperStyles() {
         if (!this._wrapper) return;
 
-        // Base class
+        // Base class — always at minimum 'libjass-wrapper'
         const classNames = ['libjass-wrapper'];
-        if (this._fontClass) classNames.push(this._fontClass);
 
-        // Spacing overrides
-        const hasLineHeight = this._lineHeight !== undefined && this._lineHeight !== 0;
-        const hasLetterSpacing = this._letterSpacing !== undefined && this._letterSpacing !== 0;
+        if (this._enableStyleMods) {
+            // Apply font class only when an explicit override was set.
+            // When _fontClass is null (subtitleOverrideAssFonts is OFF), do not force
+            // any font onto the wrapper. This allows container-embedded fonts (registered
+            // via FontFace API by FontLoader) to match libjass's original ASS Fontname
+            // inline styles without being overridden by font-family: inherit !important.
+            if (this._fontClass) classNames.push(this._fontClass);
 
-        if (hasLineHeight) {
-            this._wrapper.style.setProperty('--ass-vertical-spacing', this._lineHeight + 'px');
-            classNames.push('override-line-height');
+            // Spacing overrides
+            const hasLineHeight = this._lineHeight !== undefined && this._lineHeight !== 0;
+            const hasLetterSpacing = this._letterSpacing !== undefined && this._letterSpacing !== 0;
+
+            if (hasLineHeight) classNames.push('override-line-height');
+            if (hasLetterSpacing) classNames.push('override-letter-spacing');
+
+            const isUltraLegacy = document.documentElement.getAttribute('data-layout-tier') === 'ultra-legacy';
+
+            if (isUltraLegacy) {
+                // Chrome 38 does not support CSS variables, so dynamic inline vars fail.
+                // We must inject a dedicated style block to enforce these offsets.
+                let styleEl = document.getElementById('ass-ul-styles');
+                if (!styleEl) {
+                    styleEl = document.createElement('style');
+                    styleEl.id = 'ass-ul-styles';
+                    document.head.appendChild(styleEl);
+                }
+                
+                let cssText = '';
+                if (hasLineHeight) {
+                    cssText += `html[data-layout-tier="ultra-legacy"] .libjass-subs div[data-dialogue-id] > span { margin-bottom: ${this._lineHeight}px !important; }\n`;
+                }
+                if (hasLetterSpacing) {
+                    cssText += `html[data-layout-tier="ultra-legacy"] .libjass-wrapper.override-letter-spacing span { letter-spacing: ${this._letterSpacing}px !important; }\n`;
+                }
+                styleEl.innerHTML = cssText;
+                
+            } else {
+                // Modern WebKit: use standard CSS variables
+                if (hasLineHeight) {
+                    this._wrapper.style.setProperty('--ass-vertical-spacing', this._lineHeight + 'px');
+                } else {
+                    this._wrapper.style.removeProperty('--ass-vertical-spacing');
+                }
+
+                this._wrapper.style.removeProperty('--ass-bottom-offset');
+
+                if (hasLetterSpacing) {
+                    this._wrapper.style.setProperty('--ass-letter-spacing', this._letterSpacing + 'px');
+                } else {
+                    this._wrapper.style.removeProperty('--ass-letter-spacing');
+                }
+                
+            }
+            
+            const scaleStyleEl = document.getElementById('ass-scale-styles');
+            if (scaleStyleEl) scaleStyleEl.innerHTML = '';
         } else {
+            // Style modifications disabled: clean up any previously injected override styles
+            // so the ASS renders with its original embedded styling.
+            const ulStyleEl = document.getElementById('ass-ul-styles');
+            if (ulStyleEl) ulStyleEl.innerHTML = '';
+            const scaleStyleEl = document.getElementById('ass-scale-styles');
+            if (scaleStyleEl) scaleStyleEl.innerHTML = '';
+
+            // Remove any CSS variables that may have been set previously
             this._wrapper.style.removeProperty('--ass-vertical-spacing');
-        }
-
-        if (hasLetterSpacing) {
-            this._wrapper.style.setProperty('--ass-letter-spacing', this._letterSpacing + 'px');
-            classNames.push('override-letter-spacing');
-        } else {
+            this._wrapper.style.removeProperty('--ass-bottom-offset');
             this._wrapper.style.removeProperty('--ass-letter-spacing');
+            this._wrapper.style.transform = '';
+            this._wrapper.style.transformOrigin = '';
+            this._wrapper.style.webkitTransform = '';
+            this._wrapper.style.webkitTransformOrigin = '';
         }
 
         this._wrapper.className = classNames.join(' ');
-        log.debug(`Wrapper updated: className="${this._wrapper.className}", lineH=${this._lineHeight}, bottom=${this._bottomOffset}, letterS=${this._letterSpacing}`);
+        log.debug(`Wrapper updated: className="${this._wrapper.className}", enableStyleMods=${this._enableStyleMods}`);
     }
 
     async setFontStyles(className, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, lineHeight = 0, letterSpacing = 0, bottomOffset = 0, dialoguePositionOverride = false, positionOptions = {}) {
-        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}, position=${JSON.stringify(positionOptions)}`);
+        log.info(`ASSRenderer.setFontStyles: class="${className}", family="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, lineH=${lineHeight}, letterS=${letterSpacing}, bottom=${bottomOffset}, dialoguePos=${dialoguePositionOverride}, position=${JSON.stringify(positionOptions)}, enableMods=${this._enableStyleMods}`);
+
+        const modsToggled = this._enableStyleMods !== this._prevEnableStyleMods;
+        this._prevEnableStyleMods = this._enableStyleMods;
         const nextStyleStateKey = JSON.stringify({
             className,
             fontFamily,
@@ -285,7 +377,7 @@ export default class ASSRenderer {
             dialoguePositionOverride,
             positionOptions
         });
-        const shouldReparse = this._rawContent && nextStyleStateKey !== this._styleStateKey;
+        const shouldReparse = this._rawContent && (modsToggled || nextStyleStateKey !== this._styleStateKey);
 
         this._fontClass = className;
         this._fontFamily = fontFamily;
@@ -303,15 +395,18 @@ export default class ASSRenderer {
 
         if (shouldReparse) {
             log.info(`Re-parsing ASS with updated style settings (Font: ${fontFamily || 'file default'}, Scale: ${fontScale}, Out: ${outlineThickness}, Shad: ${shadowThickness}, DialoguePos: ${dialoguePositionOverride})`);
-            
-            // Re-preprocess and re-parse the entire string.
-            // This is the most "Nuclear" and definitive way to ensure the new font
-            // and border styles are applied throughout the entire track.
-            const processedContent = this._preProcessAssContent(this._rawContent, fontFamily, fontScale, outlineThickness, shadowThickness, dialoguePositionOverride, bottomOffset, this._positionOptions);
-            this._ass = await libjass.ASS.fromString(processedContent);
 
-            // Re-creating the renderer is the only way to apply ASS object changes
-            // The renderer will now handle its own "nudge" once ready.
+            const processedContent = this._preProcessAssContent(
+                this._rawContent,
+                fontFamily,
+                fontScale,
+                outlineThickness,
+                shadowThickness,
+                dialoguePositionOverride,
+                bottomOffset,
+                this._positionOptions
+            );
+            this._ass = await libjass.ASS.fromString(processedContent);
             this._createRenderer();
         }
     }
@@ -319,13 +414,15 @@ export default class ASSRenderer {
     _preProcessAssContent(content, fontFamily, fontScale = 1.0, outlineThickness = null, shadowThickness = null, dialoguePositionOverride = false, bottomOffset = 0, positionOptions = {}) {
         if (!content) return content;
 
-        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}, position=${JSON.stringify(positionOptions)}`);
+        log.info(`Preprocessing ASS content with font="${fontFamily}", scale=${fontScale}, outline=${outlineThickness}, shadow=${shadowThickness}, dialoguePos=${dialoguePositionOverride}, bottom=${bottomOffset}, position=${JSON.stringify(positionOptions)}, enableStyleMods=${this._enableStyleMods}`);
 
         const result = preProcessAssContent(content, {
-            fontFamily,
-            fontScale,
-            outlineThickness,
-            shadowThickness,
+            ...(this._enableStyleMods ? {
+                fontFamily,
+                fontScale,
+                outlineThickness,
+                shadowThickness
+            } : {}),
             dialoguePositionOverride,
             bottomOffset,
             ...positionOptions,
@@ -521,7 +618,8 @@ export default class ASSRenderer {
         this._wrapper.style.width = '100%';
         this._wrapper.style.height = '100%';
         this._wrapper.style.pointerEvents = 'none';
-        this._wrapper.style.zIndex = '1';
+        const isUltraLegacy = document.documentElement.getAttribute('data-layout-tier') === 'ultra-legacy';
+        this._wrapper.style.zIndex = isUltraLegacy ? '50' : '1';
         /*
          * Force LTR on the wrapper regardless of the document direction.
          * libjass uses absolute CSS pixel positioning for \pos() coordinates.
@@ -688,6 +786,11 @@ export default class ASSRenderer {
         if (this._videoElement) {
             videoWidth = this._videoElement.videoWidth || this._videoWidth;
             videoHeight = this._videoElement.videoHeight || this._videoHeight;
+        }
+
+        if (!videoWidth || !videoHeight) {
+            videoWidth = 1280;
+            videoHeight = 720;
         }
 
         // Container dimensions (what space we have to render in)

@@ -8,18 +8,32 @@
  */
 
 import Page from './Page.js';
-import { auth, api, discoverServers, cancelDiscovery, ServerUnreachableError } from '../api/index.js';
+import {
+    auth,
+    api,
+    discoverServers,
+    cancelDiscovery,
+    ServerUnreachableError,
+    hasBackgroundDiscoveryService
+} from '../api/index.js';
 import { state } from '../core/StateManager.js';
 import { router } from '../core/Router.js';
 
 import { focusManager } from '../ui/FocusManager.js';
+import { storage } from '../utils/StorageService.js';
 import { logger } from '../utils/Logger.js';
 import { i18n } from '../utils/i18n.js';
+import { escapeHtml } from '../utils/Utils.js';
 import { eventBus } from '../core/EventBus.js';
 import { layoutManager } from '../ui/LayoutManager.js';
 import { imageService } from '../utils/ImageService.js';
+import { pinManager } from '../utils/PinManager.js';
+import { pinDialog } from '../ui/PinDialog.js';
 
 const log = logger.create('Login');
+
+// Default Jellyfin port when user omits one
+const DEFAULT_PORT = 8096;
 
 // Login states — each maps to a data-section attribute on its panel
 const STATE = {
@@ -48,6 +62,7 @@ class LoginPage extends Page {
         this._serverUrl = '';
         this._discoveredServers = []; // Servers found via LAN discovery
         this._isDiscovering = false;
+        this._hasSearchedManually = false; // Track if manual search fallback was triggered
         this._isLoggingIn = false;
 
         // Quick Connect polling state
@@ -106,7 +121,7 @@ class LoginPage extends Page {
                                 type="url"
                                 id="server-url"
                                 class="text-input tv-input server-url-input"
-                                placeholder="https://your-server.com"
+                                placeholder="192.168.x.x"
                                 autocomplete="off"
                                 readonly
                                 tabindex="0"
@@ -283,7 +298,7 @@ class LoginPage extends Page {
                                 type="url"
                                 id="server-url"
                                 class="text-input tv-input server-url-input"
-                                placeholder="https://192.168.x.x:8096"
+                                placeholder="192.168.x.x"
                                 autocomplete="off"
                                 readonly
                                 tabindex="0"
@@ -480,6 +495,9 @@ class LoginPage extends Page {
         // Bind events
         this._bindEvents();
 
+        // Update search / refresh button icon depending on discovery capabilities
+        this._updateRefreshButtonIcon();
+
         // Setup focus sections
         this._setupFocus();
 
@@ -502,7 +520,26 @@ class LoginPage extends Page {
         if (savedUrl && !isKnownOffline) {
             // Server already saved and not known to be offline - skip server selection
             this._serverInput.value = savedUrl;
+
+            /*
+             * WebOS 4.0-4.4 freeze fix: the splash screen must be dismissed
+             * as soon as the loading state is visible, NOT after the server
+             * probe completes. On slow/offline servers the probe can take 6-20s,
+             * during which the splash would otherwise remain up and the device
+             * appears completely frozen to the user.
+             *
+             * We emit hideSplash here with a tiny delay so that:
+             *   1. _autoConnectToSavedServer() has shown STATE.LOADING first
+             *   2. The loading spinner is composited and visible to the user
+             *   3. The splash fade-out transition runs over the spinner, not a black screen
+             *
+             * The redundant hideSplash calls inside _autoConnectToSavedServer's
+             * success/error branches remain as a safety net for the final transition.
+             */
             this._autoConnectToSavedServer(savedUrl);
+            setTimeout(() => {
+                eventBus.emit('app:hideSplash');
+            }, 80);
         } else {
             // No saved server or known offline - show server selection immediately
             if (savedUrl) {
@@ -518,9 +555,7 @@ class LoginPage extends Page {
 
             // Ensure splash hides after switching states (if it was up)
             setTimeout(() => {
-                import('../core/EventBus.js').then(({ eventBus }) => {
-                    eventBus.emit('app:hideSplash');
-                });
+                eventBus.emit('app:hideSplash');
             }, 10);
         }
 
@@ -538,7 +573,7 @@ class LoginPage extends Page {
         // Refresh discovery button
         this.$('#refresh-discovery')?.addEventListener('click', () => {
             if (!this._isDiscovering) {
-                this._startDiscovery();
+                this._startDiscovery({ isManual: true });
             }
         });
 
@@ -756,8 +791,16 @@ class LoginPage extends Page {
     }
 
     /**
-     * Auto-connect to a saved server on app startup
-     * Skips server selection and goes straight to user list
+     * Auto-connect to a saved server on app startup.
+     * Skips server selection and goes straight to user list.
+     *
+     * IMPORTANT: The splash screen is dismissed by the caller (onMounted)
+     * BEFORE this method's async work begins. Do NOT call hideSplash inside
+     * this method's try-block opening — the caller has already done it at
+     * the right moment (when the loading spinner is first visible).
+     * The hideSplash calls at the end of the success/error paths are kept
+     * as safety nets for the final UI state transitions only.
+     *
      * @param {string} savedUrl - The saved server URL
      */
     async _autoConnectToSavedServer(savedUrl) {
@@ -796,6 +839,11 @@ class LoginPage extends Page {
                 // No public users - show manual login with auto-redirect flag
                 this._goToManualLogin(true);
             }
+
+            // Ensure splash screen hides when user selection or manual login is shown
+            setTimeout(() => {
+                eventBus.emit('app:hideSplash');
+            }, 10);
         } catch (error) {
             // Connection failed - show server selection
             log.warn('Auto-connect failed, showing server selection', error);
@@ -813,6 +861,7 @@ class LoginPage extends Page {
             setTimeout(() => {
                 const connectBtn = this.$('.connect-btn');
                 if (connectBtn) connectBtn.focus();
+                eventBus.emit('app:hideSplash');
             }, 100);
         }
     }
@@ -879,6 +928,56 @@ class LoginPage extends Page {
         }, 150);
     }
 
+    /**
+     * Normalize a user-typed server address.
+     * Rules:
+     *   - Bare hostname/IP (no protocol) → prepend http://, append :8096
+     *   - Full URL with protocol (http:// or https://) → use as-is, no port added
+     *   - If user typed their own port, it is always respected
+     * @param {string} input - Raw user input
+     * @returns {string} Normalized server URL
+     */
+    _normalizeServerUrl(input) {
+        const url = input.trim();
+        if (!url) return '';
+
+        const hasProtocol = url.includes('://');
+
+        if (!hasProtocol) {
+            // Bare hostname/IP — prepend http://, and append :8096 only when the
+            // user did not type an explicit port.
+            const prefixed = `http://${url}`;
+            try {
+                // Validate by parsing, but build the output manually below since
+                // URL.toString() drops default ports (80/443) from serialization.
+                new URL(prefixed);
+
+                // Split the authority (host:port) from any path/subpath
+                const slashIdx = prefixed.indexOf('/', prefixed.indexOf('://') + 3);
+                const authority = slashIdx === -1 ? prefixed.slice(7) : prefixed.slice(7, slashIdx);
+                const path = slashIdx === -1 ? '' : prefixed.slice(slashIdx);
+
+                const hasExplicitPort = /:\d+$/.test(authority);
+                const host = hasExplicitPort ? authority : `${authority}:${DEFAULT_PORT}`;
+
+                let result = `http://${host}${path}`;
+                if (result.endsWith('/')) {
+                    result = result.slice(0, -1);
+                }
+                return result;
+            } catch {
+                return prefixed;
+            }
+        }
+
+        // User typed a full URL with protocol — respect their choice, no port added
+        let result = url;
+        if (result.endsWith('/')) {
+            result = result.slice(0, -1);
+        }
+        return result;
+    }
+
     async _connectToServer() {
         const url = this._serverInput.value.trim();
 
@@ -891,8 +990,7 @@ class LoginPage extends Page {
         this._hideError('server-error');
 
         try {
-            // Add https if no protocol
-            const serverUrl = url.includes('://') ? url : `https://${url}`;
+            const serverUrl = this._normalizeServerUrl(url);
             this._serverUrl = serverUrl;
 
             // Connect to server
@@ -1008,11 +1106,24 @@ class LoginPage extends Page {
      * If user has password, show password form
      * @param {Object} user - User object from getPublicUsers
      */
-    async _selectUser(user) {
+    async _selectUser(user, pinVerified = false) {
         log.info(`LoginPage: _selectUser called for "${user?.Name}"`);
 
         if (!user) {
             log.error('LoginPage: _selectUser called with null/undefined user');
+            return;
+        }
+
+        // Per-profile PIN gate (opt-in, local). If this profile has a PIN
+        // configured, require it before proceeding into the normal login flow.
+        if (!pinVerified && pinManager.hasPin(user.Id)) {
+            pinDialog.show({
+                mode: 'verify',
+                userId: user.Id,
+                title: i18n.t('EnterPin') || 'Enter PIN',
+                onSuccess: () => this._selectUser(user, true),
+                onCancel: () => this._showState(STATE.USERS)
+            });
             return;
         }
 
@@ -1217,6 +1328,7 @@ class LoginPage extends Page {
                 router.navigate('/profiles', { replace: true });
             } else if (typeof tizen !== 'undefined') {
                 try {
+                    storage.flush();
                     tizen.application.getCurrentApplication().exit();
                 } catch (e) {
                     log.error('App exit failed:', e);
@@ -1302,13 +1414,52 @@ class LoginPage extends Page {
     // ========================================================================
 
     /**
-     * Start LAN server discovery in the background
+     * Start LAN server discovery in the background.
+     * If device has no background UDP discovery service and this is an automatic startup call
+     * (isManual = false), we skip the heavy HTTP subnet scan to prevent older TV hardware lag.
+     * @param {Object} [options={}] - Discovery options
+     * @param {boolean} [options.isManual=false] - Whether discovery was manually requested by clicking search/refresh button
      */
-    async _startDiscovery() {
+    async _startDiscovery(options = {}) {
+        const isManual = options.isManual === true;
+        if (isManual) {
+            this._hasSearchedManually = true;
+        }
+
+        const hasBgService = hasBackgroundDiscoveryService();
+
+        // If automatic startup discovery is requested on a device WITHOUT background UDP service,
+        // skip the automatic HTTP scan to prevent TV slowdown / UI lag.
+        if (!isManual && !hasBgService) {
+            log.info(
+                'LoginPage: No background discovery service available — skipping auto HTTP scan to prevent TV slowdown.'
+            );
+            this._isDiscovering = false;
+
+            // Load and render saved servers if available
+            this._discoveredServers = [];
+            const savedServers = auth.getSavedServers();
+            if (savedServers && savedServers.length > 0) {
+                savedServers.forEach((saved) => {
+                    const fallbackName = saved.serverUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+                    this._discoveredServers.push({
+                        name: saved.serverName || fallbackName,
+                        address: saved.serverUrl,
+                        version: null,
+                        isSaved: true
+                    });
+                });
+            }
+            this._renderDiscoveredServers();
+            this._updateRefreshButtonIcon();
+            return;
+        }
+
         if (this._isDiscovering) return;
         this._isDiscovering = true;
+        this._updateRefreshButtonIcon();
 
-        log.info('LoginPage: Starting server discovery...');
+        log.info(`LoginPage: Starting server discovery (isManual=${isManual})...`);
 
         // Initialize with saved servers first
         this._discoveredServers = [];
@@ -1354,7 +1505,8 @@ class LoginPage extends Page {
                             this._renderDiscoveredServers();
                         }
                     }
-                }
+                },
+                { isManual, allowHttpFallback: isManual }
             );
 
             // Ensure final list is synced, but preserve our saved servers
@@ -1383,6 +1535,48 @@ class LoginPage extends Page {
 
             // Trigger a re-render of servers to immediately hide the scan progress indicator
             this._renderDiscoveredServers();
+            this._updateRefreshButtonIcon();
+        }
+    }
+
+    /**
+     * Update the refresh/search button icon based on background service availability
+     * and manual search state.
+     * If the platform lacks a background UDP discovery service AND manual search has
+     * not been triggered yet, display the Search icon. Otherwise, display Refresh icon.
+     * @private
+     */
+    _updateRefreshButtonIcon() {
+        const btn = this.$('#refresh-discovery');
+        if (!btn) return;
+
+        const hasBgService = hasBackgroundDiscoveryService();
+        // If device has no background UDP service and manual search has not been run yet, show search icon
+        const showSearchIcon = !hasBgService && !this._hasSearchedManually;
+
+        const searchSvg = `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+        `;
+
+        const refreshSvg = `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 4v6h-6"></path>
+                <path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+        `;
+
+        if (showSearchIcon) {
+            btn.innerHTML = searchSvg;
+            btn.title = i18n.t('Search') || 'Search';
+            btn.setAttribute('aria-label', i18n.t('Search') || 'Search');
+        } else {
+            btn.innerHTML = refreshSvg;
+            btn.title = i18n.t('Refresh') || 'Refresh';
+            btn.setAttribute('aria-label', i18n.t('Refresh') || 'Refresh');
         }
     }
 
@@ -1456,12 +1650,11 @@ class LoginPage extends Page {
                                     </div>
                                     <div class="server-info">
                                         <div class="name-row">
-                                            <span class="server-name">${server.name}</span>
-                                            <!-- Elegant, Apple HIG-style glassmorphic saved badge for visual separation -->
+                                            <span class="server-name">${escapeHtml(server.name)}</span>
                                             <span class="server-badge" data-i18n="SavedBadge">${i18n.t('SavedBadge') || 'Saved'}</span>
-                                            ${server.version ? `<span class="server-version">v${server.version}</span>` : ''}
+                                            ${server.version ? `<span class="server-version">v${escapeHtml(server.version)}</span>` : ''}
                                         </div>
-                                        <span class="server-address">${server.address}</span>
+                                        <span class="server-address">${escapeHtml(server.address)}</span>
                                     </div>
                                 </li>
                             `;
@@ -1479,10 +1672,10 @@ class LoginPage extends Page {
                                     </div>
                                     <div class="server-info">
                                         <div class="name-row">
-                                            <span class="server-name">${server.name}</span>
-                                            ${server.version ? `<span class="server-version">v${server.version}</span>` : ''}
+                                            <span class="server-name">${escapeHtml(server.name)}</span>
+                                            ${server.version ? `<span class="server-version">v${escapeHtml(server.version)}</span>` : ''}
                                         </div>
-                                        <span class="server-address">${server.address}</span>
+                                        <span class="server-address">${escapeHtml(server.address)}</span>
                                     </div>
                                 </li>
                             `;
@@ -1499,10 +1692,10 @@ class LoginPage extends Page {
                     const index = this._discoveredServers.indexOf(server);
                     return `
                     <li class="server-item" data-server-index="${index}" tabindex="0">
-                        <span class="server-name">${server.name}</span>
+                        <span class="server-name">${escapeHtml(server.name)}</span>
                         <span class="server-badge" data-i18n="SavedBadge">Saved</span>
-                        <span class="server-address">${server.address}</span>
-                        ${server.version ? `<span class="server-version">v${server.version}</span>` : ''}
+                        <span class="server-address">${escapeHtml(server.address)}</span>
+                        ${server.version ? `<span class="server-version">v${escapeHtml(server.version)}</span>` : ''}
                     </li>
                 `;
                 })
@@ -1522,9 +1715,9 @@ class LoginPage extends Page {
                         const index = this._discoveredServers.indexOf(server);
                         return `
                         <li class="server-item" data-server-index="${index}" tabindex="0">
-                            <span class="server-name">${server.name}</span>
-                            <span class="server-address">${server.address}</span>
-                            ${server.version ? `<span class="server-version">v${server.version}</span>` : ''}
+                            <span class="server-name">${escapeHtml(server.name)}</span>
+                            <span class="server-address">${escapeHtml(server.address)}</span>
+                            ${server.version ? `<span class="server-version">v${escapeHtml(server.version)}</span>` : ''}
                         </li>
                     `;
                     })
@@ -1577,13 +1770,10 @@ class LoginPage extends Page {
         if (server && this._serverInput) {
             this._serverInput.value = server.address;
 
-            // Focus the Connect button so user can proceed immediately
-            const connectBtn = this.$('.connect-btn');
-            if (connectBtn) {
-                connectBtn.focus();
-            }
+            log.info(`Selected server ${server.name} (${server.address}) - initiating auto-connect`);
 
-            log.info(`Selected server ${server.name} (${server.address})`);
+            // Automatically connect to the selected server immediately
+            this._connectToServer();
         }
     }
 
