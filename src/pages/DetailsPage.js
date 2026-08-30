@@ -22,6 +22,8 @@ import MediaGrid from '../components/MediaGrid.js';
 import MediaInfoModal from '../components/MediaInfoModal.js';
 import TrailerDialog from '../components/TrailerDialog.js';
 import { TrailerPlayer } from '../components/TrailerPlayer.js';
+import AddToTargetModal from '../components/AddToTargetModal.js';
+import DescriptionModal from '../components/DescriptionModal.js';
 
 import BackdropManager from '../utils/BackdropManager.js';
 import { PlayerSettings } from '../utils/PlayerSettings.js';
@@ -35,6 +37,8 @@ import { shouldShowScore } from '../utils/visibility.js';
 import { storage } from '../utils/StorageService.js';
 import { formatDate } from '../utils/TimeUtils.js';
 import { themeSongPlayer } from '../utils/ThemeSongPlayer.js';
+import { detailsIcons, settingsIcons } from '../utils/Icons.js';
+import { escapeHtml } from '../utils/Utils.js';
 
 const log = logger.create('DetailsPage');
 
@@ -59,6 +63,12 @@ class DetailsPage extends Page {
 
         // Mark as async page for Navigation State
         this._isAsyncPage = true;
+
+        // Deferred loading flag: when set, the loading overlay stays visible
+        // until focus restoration completes, preventing a visible "focus jump"
+        // on back-navigation where the page content appears and then focus
+        // snaps to a restored card.
+        this._deferredLoading = false;
     }
 
     /**
@@ -73,8 +83,18 @@ class DetailsPage extends Page {
     }
 
     render() {
+        const detailsLayout = storage.getItem('pref:detailsLayout') || 'posterLeft';
+        let layoutClass = 'layout-poster-left';
+        if (detailsLayout === 'posterRight') {
+            layoutClass = 'layout-poster-right';
+        } else if (detailsLayout === 'backdropMinimal') {
+            layoutClass = 'layout-backdrop-minimal';
+        } else if (detailsLayout === 'backdropLeft') {
+            layoutClass = 'layout-backdrop-left';
+        }
+
         return `
-            <div class="page details-page">
+            <div class="page details-page ${layoutClass}">
                 <!-- Backdrop -->
                 <div class="details-backdrop" id="backdrop">
                     <div class="backdrop-gradient"></div>
@@ -99,52 +119,44 @@ class DetailsPage extends Page {
                             <!-- Actions -->
                             <section class="details-actions" id="actions">
                                 <button class="btn btn-primary play-btn" tabindex="0">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                    ${detailsIcons.play}
                                     <span data-i18n="Play">Play</span>
                                 </button>
                                 <button class="btn btn-secondary resume-btn hidden" tabindex="-1">
                                     <span data-i18n="ButtonResume">Resume</span>
                                 </button>
                                 <button class="btn btn-icon reset-btn hidden" tabindex="-1" aria-label="${i18n.t('ResetProgress')}">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                                        <path d="M3 3v5h5"/>
-                                    </svg>
+                                    ${detailsIcons.reset}
+                                </button>
+                                <button class="btn btn-icon ghost-btn hidden" tabindex="-1" aria-label="${i18n.t('GhostMode') || 'Ghost Mode'}">
+                                    ${detailsIcons.ghost}
                                 </button>
                                 <!-- Trailer button — shown only when item has local or remote trailers.
                                      Visibility is set dynamically by _updateTrailerButton() after load. -->
                                 <button class="btn btn-icon trailer-btn hidden" tabindex="-1" aria-label="${i18n.t('WatchTrailer') || 'Watch Trailer'}">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                                        <path d="M18 3v2h-2V3H8v2H6V3H4v18h2v-2h2v2h8v-2h2v2h2V3h-2zM8 17H6v-2h2v2zm0-4H6v-2h2v2zm0-4H6V7h2v2zm10 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V7h2v2z"/>
-                                    </svg>
+                                    ${detailsIcons.trailer}
                                 </button>
                                 <button class="btn btn-icon shuffle-btn hidden" tabindex="-1" aria-label="${i18n.t('Shuffle')}">
-                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
-                                        <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
-                                    </svg>
+                                    ${detailsIcons.shuffle}
                                 </button>
                                 <button class="btn btn-icon watched-btn" tabindex="0" aria-label="${i18n.t('MarkWatched')}">
-                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                    ${detailsIcons.watchedOutline}
                                 </button>
                                 <!-- Favorite Button Injected Here -->
                                 <button class="btn btn-icon audio-btn" tabindex="0" aria-label="${i18n.t('AudioTracks')}">
-                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/></svg>
+                                    ${detailsIcons.audio}
                                 </button>
                                 <button class="btn btn-icon subtitle-btn" tabindex="0" aria-label="${i18n.t('SubtitleTracks')}">
-                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg>
+                                    ${detailsIcons.subtitle}
                                 </button>
                                 <button class="btn btn-icon more-btn" tabindex="0" aria-label="${i18n.t('MoreOptions')}">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                        <circle cx="12" cy="12" r="1"></circle>
-                                        <circle cx="12" cy="5" r="1"></circle>
-                                        <circle cx="12" cy="19" r="1"></circle>
-                                    </svg>
+                                    ${detailsIcons.more}
                                 </button>
                             </section>
 
                             <!-- Overview -->
                             <div class="details-overview">
-                                <p class="overview-text line-clamp-6"></p>
+                                <div class="overview-text line-clamp-6" tabindex="-1"></div>
                                 <button class="see-more-btn" tabindex="0" data-i18n="ShowMore">${i18n.t('ShowMore')}</button>
                             </div>
 
@@ -163,14 +175,50 @@ class DetailsPage extends Page {
 
                     <!-- Collection Movies (BoxSet) -->
                     <section class="details-collection-movies media-row hidden" id="collection-movies-section">
-                        <h2 class="row-title" data-i18n="Movies">Movies in Collection</h2>
+                        <h2 class="row-title" data-i18n="Movies">Movies</h2>
                         <div class="collection-row row-items" id="collection-movies-row"></div>
                     </section>
 
                     <!-- Collection Shows (BoxSet) -->
                     <section class="details-collection-shows media-row hidden" id="collection-shows-section">
-                        <h2 class="row-title" data-i18n="ShowsInCollection">Shows in Collection</h2>
+                        <h2 class="row-title" data-i18n="Series">TV Shows</h2>
                         <div class="collection-row row-items" id="collection-shows-row"></div>
+                    </section>
+
+                    <!-- Collection Episodes (BoxSet) -->
+                    <section class="details-collection-episodes media-row hidden" id="collection-episodes-section">
+                        <h2 class="row-title" data-i18n="Episodes">Episodes</h2>
+                        <div class="collection-row row-items" id="collection-episodes-row"></div>
+                    </section>
+
+                    <!-- Collection Videos (BoxSet) -->
+                    <section class="details-collection-videos media-row hidden" id="collection-videos-section">
+                        <h2 class="row-title" data-i18n="Videos">Videos</h2>
+                        <div class="collection-row row-items" id="collection-videos-row"></div>
+                    </section>
+
+                    <!-- Collection Albums (BoxSet) -->
+                    <section class="details-collection-albums media-row hidden" id="collection-albums-section">
+                        <h2 class="row-title" data-i18n="Albums">Albums</h2>
+                        <div class="collection-row row-items" id="collection-albums-row"></div>
+                    </section>
+
+                    <!-- Collection Books (BoxSet) -->
+                    <section class="details-collection-books media-row hidden" id="collection-books-section">
+                        <h2 class="row-title" data-i18n="Books">Books</h2>
+                        <div class="collection-row row-items" id="collection-books-row"></div>
+                    </section>
+
+                    <!-- Sub-Collections (BoxSet) -->
+                    <section class="details-collection-subcollections media-row hidden" id="collection-subcollections-section">
+                        <h2 class="row-title" data-i18n="Collections">Collections</h2>
+                        <div class="collection-row row-items" id="collection-subcollections-row"></div>
+                    </section>
+
+                    <!-- Collection Other Items (BoxSet) -->
+                    <section class="details-collection-other media-row hidden" id="collection-other-section">
+                        <h2 class="row-title" data-i18n="HeaderOtherItems">Other Items</h2>
+                        <div class="collection-row row-items" id="collection-other-row"></div>
                     </section>
 
                     <!-- Playlist Items — shown when viewing a Playlist type item.
@@ -205,6 +253,12 @@ class DetailsPage extends Page {
                         <div class="season-episodes-row row-items" id="more-from-season-row"></div>
                     </section>
 
+                    <!-- Additional Parts (Multi-part movies/videos) -->
+                    <section class="details-additional-parts media-row hidden" id="additional-parts-section">
+                        <h2 class="row-title" data-i18n="AdditionalParts">Additional Parts</h2>
+                        <div class="additional-parts-row row-items" id="additional-parts-row"></div>
+                    </section>
+
                     <!-- Cast & Crew -->
                     <section class="details-people media-row hidden" id="people-section">
                         <h2 class="row-title" data-i18n="HeaderCastAndCrew">Cast & Crew</h2>
@@ -235,6 +289,12 @@ class DetailsPage extends Page {
                         <div class="guest-stars-row row-items" id="guest-stars-row"></div>
                     </section>
                     
+                    <!-- Collections this item belongs to -->
+                    <section class="details-item-collections media-row hidden" id="item-collections-section">
+                        <h2 class="row-title" data-i18n="Collections">Collections</h2>
+                        <div class="item-collections-row row-items" id="item-collections-row"></div>
+                    </section>
+
                     <!-- Similar items -->
                     <section class="details-similar media-row hidden" id="similar-section">
                         <h2 class="row-title" data-i18n="HeaderMoreLikeThis">More Like This</h2>
@@ -300,18 +360,27 @@ class DetailsPage extends Page {
     }
 
     _setupFocus() {
-        // Register Action Buttons
+        // ====================================================================
+        // Details Page Primary Actions Focus Registration
+        // ====================================================================
+        // We register the actions section using a 'grid' orientation,
+        // On smaller displays or layouts with wrapped buttons, a strict horizontal
+        // orientation forces users to navigate linearly and skips wrapped elements
+        // when pressing vertical keys (UP/DOWN).
+        // Using 'grid' delegates movement to the SpatialNavigator, allowing the D-pad
+        // to move naturally between wrapped rows of action buttons.
+        // ====================================================================
         this.registerFocusSection('details-actions', this.$('#actions'), {
-            orientation: 'horizontal',
-            leaveUp: null, // Top of page
-            leaveDown: null, // Will be updated dynamically
+            orientation: 'grid',
+            leaveUp: null, // Boundary at the top of the page
+            leaveDown: null, // Dynamically chained based on sibling visibility
             leaveLeft: 'sidebar',
-            // PRIORITIZE: Always land on Resume (if visible) or Play when entering this row
-            // This prevents "random" landing on Favorite/Subtitle buttons when coming from below
+            // Landing priority: always favor primary action (Play or Resume)
+            // when entering this section to keep interaction flow consistent.
             defaultFocusSelector: '.resume-btn:not(.hidden), .play-btn'
         });
 
-        // Default to actions row (will be overridden in _loadDetails for Season items)
+        // Set the primary actions row as the initial active focus section
         this.setActiveSection('details-actions');
     }
 
@@ -354,6 +423,13 @@ class DetailsPage extends Page {
             resetBtn.addEventListener('click', (e) => handleActivate(e, () => this._resetProgress()));
         }
 
+        // Ghost button
+        const ghostBtn = this.$('.ghost-btn');
+        if (ghostBtn) {
+            ghostBtn.addEventListener('mousedown', (e) => handleActivate(e, () => this._play({ ghostMode: true })));
+            ghostBtn.addEventListener('click', (e) => handleActivate(e, () => this._play({ ghostMode: true })));
+        }
+
         // Trailer button
         const trailerBtn = this.$('.trailer-btn');
         if (trailerBtn) {
@@ -394,18 +470,9 @@ class DetailsPage extends Page {
         // See more button
         const seeMoreBtn = this.$('.see-more-btn');
         if (seeMoreBtn) {
-            seeMoreBtn.addEventListener('mousedown', (e) => {
-                const now = Date.now();
-                if (now - lastActivateTime < 400) return;
-                lastActivateTime = now;
-                this._showFullOverview();
-            });
-            seeMoreBtn.addEventListener('click', (e) => {
-                const now = Date.now();
-                if (now - lastActivateTime < 400) return;
-                lastActivateTime = now;
-                this._showFullOverview();
-            });
+            // Route events through the central handler to manage activation limits.
+            seeMoreBtn.addEventListener('mousedown', (e) => handleActivate(e, () => this._showFullOverview()));
+            seeMoreBtn.addEventListener('click', (e) => handleActivate(e, () => this._showFullOverview()));
         }
     }
 
@@ -415,18 +482,14 @@ class DetailsPage extends Page {
 
         try {
             // ────────────────────────────────────────────────────────────────────────
-            // 2. Fetch Base Item Details
+            // 1. Fetch Base Item Details (blocking — page needs this to render)
             // ────────────────────────────────────────────────────────────────────────
-            // Backward-compatible custom metadata selector options.
-            // Check the new pref:richMetadataStyle select preference, fallback cleanly to standard hideRichMetadata.
-            // Under HIG Guidelines, this guarantees lightweight layouts on spatial networks.
             const richMetadataStyle =
                 storage.getItem('pref:richMetadataStyle') ||
                 (storage.getItem('pref:hideRichMetadata') === 'true' ? 'none' : 'all');
             const hideRich = richMetadataStyle === 'none';
             const hideCast = storage.getItem('pref:hideCastSection') === 'true';
 
-            // Build dynamic fields list based on user preferences to save bandwidth/CPU
             const requestedFields = [
                 'MediaStreams',
                 'MediaSources',
@@ -446,21 +509,13 @@ class DetailsPage extends Page {
             ];
 
             if (!hideRich) {
-                // Genres are always loaded if not hidden.
                 requestedFields.push('Genres', 'GenreItems');
-
-                // Studios are required for 'all' or 'genres-studios-writers'.
                 if (richMetadataStyle === 'all' || richMetadataStyle === 'genres-studios-writers') {
                     requestedFields.push('Studios');
                 }
-
-                // Tags are only required when showing full metadata.
                 if (richMetadataStyle === 'all') {
                     requestedFields.push('Tags');
                 }
-
-                // Directors and Writers come from the 'People' collection in Jellyfin.
-                // If they are requested via the rich metadata dropdown, ensure we include 'People' even if the cast section is hidden.
                 if (
                     richMetadataStyle === 'all' ||
                     richMetadataStyle === 'genres-studios-writers' ||
@@ -471,46 +526,24 @@ class DetailsPage extends Page {
             }
 
             if (!hideCast) {
-                // Ensure People is loaded for cast display (avoid duplicates using unique tracking or simple array inclusion check)
                 if (!requestedFields.includes('People')) {
                     requestedFields.push('People');
                 }
             }
 
+            const userPromise = state.get('user:data') ? Promise.resolve(state.get('user:data')) : api.getCurrentUser();
+
             const item = await api.getItem(this._itemId, {
-                // We request comprehensive fields to avoid redundant refetching.
-                // CanDelete is essential for implementing the 'Delete Media' feature.
-                // MediaSources must be explicitly requested to guarantee MediaStreams logic works reliably.
-                // We also request Photo EXIF fields so they are available immediately.
                 Fields: requestedFields.join(',')
             });
             this._item = item;
-            //log.debug('Item loaded:', item);
 
-            // ── Restore persisted version selection ─────────────────────────────────
-            // We key by itemId so each item independently remembers its last version.
-            // Only restore if the saved ID still exists in the current MediaSources list
-            // (the server may have removed a version since the last visit).
-            const savedSourceId = storage.getItem(`mediaSource:${this._itemId}`);
-            if (savedSourceId && item.MediaSources?.some((m) => m.Id === savedSourceId)) {
-                this._selectedMediaSourceId = savedSourceId;
-                log.info('Restored persisted media source:', savedSourceId);
-            } else {
-                // Reset — either first visit or the saved source no longer exists
-                this._selectedMediaSourceId = null;
+            // Cache Series item for reuse across child Season/Episode detail pages
+            if (item.Type === 'Series') {
+                state.set(`details:series:${item.Id}`, item);
             }
 
-            // Reset stream selections on every fresh item load (they are version-specific)
-            this._selectedAudioIndex = undefined;
-            this._selectedSubtitleIndex = undefined;
-
-            // ────────────────────────────────────────────────────────────────────────
-            // 3. Fetch User and Library Context
-            // ────────────────────────────────────────────────────────────────────────
-            this._currentUser = await api.getCurrentUser();
-            log.debug('Current user loaded:', this._currentUser);
-
-            // 2. Render all text content immediately (Metadata, Hero Info)
+            // Render all text content immediately — only needs this._item
             this._renderHeroText();
             this._setupFavoriteButton();
             this._positionEpisodeMetadataBlocks();
@@ -522,28 +555,84 @@ class DetailsPage extends Page {
             // are present in the initial getItem response without extra API calls.
             this._updateTrailerButton();
 
-            // 3. Fire image loading in the background (fire-and-forget).
-            // The poster and backdrop are not used for layout — they are decorative
-            // overlays. We do NOT await them so the content rows are never held up
-            // by a slow image download or the 800ms safety timeout.
-            this._loadImages(); // non-blocking
-
-            // 4. Parallelize loading of all major content (rows, similar items)
-            const loadTasks = [this._loadSecondaryContent()];
-
-            if (this._item.Type !== 'Season') {
-                loadTasks.push(this._loadSimilar());
+            // Restore persisted version selection
+            const savedSourceId = storage.getItem(`mediaSource:${this._itemId}`);
+            if (savedSourceId && item.MediaSources?.some((m) => m.Id === savedSourceId)) {
+                this._selectedMediaSourceId = savedSourceId;
+            } else {
+                this._selectedMediaSourceId = null;
             }
 
-            await Promise.all(loadTasks);
+            this._selectedAudioIndex = undefined;
+            this._selectedSubtitleIndex = undefined;
 
-            // Trigger theme song background audio if user has activated it in display settings
+            // Await user data (likely already resolved from state cache)
+            this._currentUser = await userPromise;
+
+            // ────────────────────────────────────────────────────────────────────────
+            // 2. Fire background images (non-blocking)
+            // ────────────────────────────────────────────────────────────────────────
+            this._loadImages();
+
+            // ────────────────────────────────────────────────────────────────────────
+            // 3. Load logo — await for backdrop layouts (where logo is the primary
+            //    title), fire-and-forget for poster layouts (text title is sufficient)
+            // ────────────────────────────────────────────────────────────────────────
+            const detailsLayout = storage.getItem('pref:detailsLayout') || 'posterLeft';
+            const isBackdropLayout = detailsLayout === 'backdropMinimal' || detailsLayout === 'backdropLeft';
+            if (isBackdropLayout) {
+                await this._loadLogoAsync();
+            } else {
+                this._loadLogo();
+            }
+
+            // ────────────────────────────────────────────────────────────────────────
+            // 4. Hide loading — main text content is visible, images/logo loading in bg
+            //    But if we have a pending focus target to restore (back-navigation),
+            //    defer hiding the overlay until focus lands on the target row.
+            //    This prevents a visible "focus jump" where the page content appears
+            //    and then focus snaps to a restored card a frame later.
+            // ────────────────────────────────────────────────────────────────────────
+            const focusStateKey = `details:lastFocusedItem:${this._itemId}`;
+            const hasFocusTarget = this._pendingNavState || state.get(focusStateKey);
+            if (hasFocusTarget) {
+                this._deferredLoading = true;
+            } else {
+                this.setLoading(false);
+
+                // No restore target, so the page is about to become interactive right
+                // now — before secondary content (cast, similar, collections) below has
+                // even started loading. Force focus onto Resume immediately rather than
+                // waiting for the deferred block further down, which only runs once all
+                // of that secondary content finishes. Otherwise there's a multi-second
+                // window where the page looks ready but focus is still on the default
+                // Play button, and a fast OK press starts playback from scratch instead
+                // of resuming.
+                this._resumeFocusForced = this._focusResumeButton();
+            }
+
+            // ────────────────────────────────────────────────────────────────────────
+            // 5. Load secondary content in visual order (top rows first, bottom rows last)
+            // ────────────────────────────────────────────────────────────────────────
+            // 5a. Primary rows first (seasons, episodes, cast, special features)
+            await this._loadSecondaryContent();
+
+            // 4b. Bottom-of-page rows after (similar items, collections)
+            if (this._item.Type !== 'Season') {
+                await this._loadSimilar();
+            }
+            if (this._item.Type === 'Movie' || this._item.Type === 'Series') {
+                await this._loadItemCollections();
+            }
+
+            // Trigger theme song background audio if user has activated it
             if (storage.getItem('pref:playThemeSongs') === 'true') {
                 void this._playThemeSong();
             }
 
-            // 4. Rebuild navigation chain after everything is in the DOM
-            // We use requestAnimationFrame to ensure the browser has parsed the new HTML
+            // ────────────────────────────────────────────────────────────────────────
+            // 5. Post-render tasks (navigation chain, focus restoration)
+            // ────────────────────────────────────────────────────────────────────────
             await new Promise((resolve) => {
                 requestAnimationFrame(() => {
                     this._rebuildNavigationChain();
@@ -551,22 +640,24 @@ class DetailsPage extends Page {
                 });
             });
 
-            // FIX: Ensure Focus Manager knows about the Resume button if it appeared
             focusManager.invalidateCache('details-actions');
 
-            // 5. Restore custom scroll/focus FIRST before hiding the loading overlay
-            // If we have a pending navigation state, it will be handled by restoreScrollFocusWhenReady()
-            // which was called in onInit. If not, we handle initial landing here.
             requestAnimationFrame(() => {
                 const stateKey = `details:lastFocusedItem:${this._itemId}`;
-                const lastFocusedObj = state.get(stateKey);
+                let lastFocusedObj = null;
+
+                if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                    lastFocusedObj = state.get(stateKey);
+                } else {
+                    state.delete(stateKey);
+                }
+
                 let restoredFocus = false;
 
                 if (lastFocusedObj) {
                     const targetId = lastFocusedObj.itemId;
                     const sectionId = lastFocusedObj.sectionId;
 
-                    // Support virtual rows (where elements might not be in DOM yet) by finding index
                     const virtualRow = this._virtualRows ? this._virtualRows[sectionId] : null;
 
                     if (virtualRow) {
@@ -582,7 +673,6 @@ class DetailsPage extends Page {
                             }
                         }
                     } else {
-                        // Standard fallback for non-virtual row sections (like similar items if they aren't virtual)
                         const sectionConfig = focusManager.getSectionConfig(sectionId);
                         const sectionContainer = sectionConfig ? sectionConfig.container : this.el;
                         const savedCard = sectionContainer.querySelector(
@@ -598,27 +688,48 @@ class DetailsPage extends Page {
                     state.delete(stateKey);
                 }
 
-                if (!restoredFocus && !this._pendingNavState) {
-                    if (this._item.UserData?.PlaybackPositionTicks > 0) {
-                        // If we have resume progress (Movie/Episode), FORCE focus to the resume button
-                        const resumeBtn = this.$('.resume-btn');
-                        if (resumeBtn && !resumeBtn.classList.contains('hidden')) {
-                            log.info('Forcing focus to Resume button');
-                            focusManager.focusElement(resumeBtn);
-                        }
+                if (!restoredFocus) {
+                    if (this._pendingNavState) {
+                        // A Back-navigation left us a section/index to restore (e.g.
+                        // returning from Settings via the sidebar). Consume it now —
+                        // otherwise it just sits here forever, since DetailsPage never
+                        // triggers the base-class restore itself, and the Resume-button
+                        // fallback below would be skipped without ever taking its place.
+                        this.restoreScrollFocusWhenReady();
+                    } else if (!this._resumeFocusForced) {
+                        this._focusResumeButton();
                     }
                 }
 
-                // 6. NOW hide loading - page is scrolled and focused correctly
-                requestAnimationFrame(() => {
+                // If loading was deferred for focus restoration, reveal the page now
+                // that focus has been placed (or attempted). This prevents the visible
+                // "focus jump" when the page content is revealed and focus snaps to a
+                // restored card in a later frame.
+                if (this._deferredLoading) {
+                    this._deferredLoading = false;
                     this.setLoading(false);
-                });
+                }
             });
         } catch (error) {
             log.error('Failed to load', error);
             this.showError(i18n.t('FailedToLoadDetails'));
             this.setLoading(false);
         }
+    }
+
+    /**
+     * Focus the Resume button if the item has playback progress and the button
+     * is visible. Returns whether focus was actually forced.
+     */
+    _focusResumeButton() {
+        if (!(this._item.UserData?.PlaybackPositionTicks > 0)) return false;
+
+        const resumeBtn = this.$('.resume-btn');
+        if (!resumeBtn || resumeBtn.classList.contains('hidden')) return false;
+
+        log.info('Forcing focus to Resume button');
+        focusManager.focusElement(resumeBtn);
+        return true;
     }
 
     _showVersionSelectionMenu() {
@@ -650,171 +761,137 @@ class DetailsPage extends Page {
     }
 
     _loadImages() {
-        return new Promise((resolve) => {
-            const item = this._item;
+        const item = this._item;
 
-            // Guard: Promise.resolve() is idempotent, but we track this
-            // to avoid logging a spurious "timed out" warning after the
-            // image has already loaded and resolved the promise.
-            let resolved = false;
+        // Poster
+        const posterContainer = this.$('#poster');
+        posterContainer.innerHTML = '';
 
-            // Safety timeout: don't block page interaction forever if the
-            // poster is slow. 800ms is sufficient — poster loading is fire-and-forget
-            // now, so we can be more aggressive without impacting page readiness.
-            const timeout = setTimeout(() => {
-                if (!resolved) {
-                    log.warn('Poster load timed out, showing content');
-                    resolved = true;
-                    resolve();
-                }
-            }, 800);
+        // Determine Aspect Ratio Type
+        let posterType = 'poster';
+        if (item.Type === 'Episode') posterType = 'landscape';
+        if (
+            item.Type === 'MusicAlbum' ||
+            item.Type === 'MusicArtist' ||
+            item.Type === 'Audio' ||
+            item.Type === 'TvChannel'
+        )
+            posterType = 'square';
 
-            const onPosterReady = () => {
-                if (!resolved) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            };
+        // Apply class for CSS aspect ratio
+        posterContainer.classList.remove('landscape', 'square');
+        if (posterType !== 'poster') {
+            posterContainer.classList.add(posterType);
+        }
 
-            // Poster
-            const posterContainer = this.$('#poster');
-            posterContainer.innerHTML = '';
-
-            // Determine Aspect Ratio Type
-            let posterType = 'poster';
-            if (item.Type === 'Episode') posterType = 'landscape';
-            if (
-                item.Type === 'MusicAlbum' ||
-                item.Type === 'MusicArtist' ||
-                item.Type === 'Audio' ||
-                item.Type === 'TvChannel'
-            )
-                posterType = 'square';
-
-            // Apply class for CSS aspect ratio
-            posterContainer.classList.remove('landscape', 'square');
-            if (posterType !== 'poster') {
-                posterContainer.classList.add(posterType);
-            }
-
-            if (item.ImageTags && item.ImageTags.Primary) {
-                const params = imageService.getParams('details-poster');
-                const posterUrl = api.getImageUrl(item.Id, 'Primary', {
-                    maxWidth: params.maxWidth,
-                    quality: params.quality
-                });
-
-                // Resolve Poster BlurHash
-                const isBlurHashDisabled = storage.getItem('litefin:disableBlurhash') === 'true';
-                let posterBlurHash = '';
-                if (!isBlurHashDisabled && item.ImageBlurHashes?.Primary) {
-                    const keys = Object.keys(item.ImageBlurHashes.Primary);
-                    if (keys.length > 0) {
-                        posterBlurHash = item.ImageBlurHashes.Primary[keys[0]];
-                    }
-                }
-
-                // Render dynamic BlurHash canvas placeholder
-                let posterCanvas = null;
-                if (posterBlurHash) {
-                    posterCanvas = document.createElement('canvas');
-                    posterCanvas.className = 'blurhash-canvas poster-blurhash';
-                    posterCanvas.style.position = 'absolute';
-                    posterCanvas.style.top = '0';
-                    posterCanvas.style.left = '0';
-                    posterCanvas.style.width = '100%';
-                    posterCanvas.style.height = '100%';
-                    posterCanvas.style.objectFit = 'cover';
-                    posterCanvas.style.zIndex = '0';
-                    posterCanvas.style.transition = 'opacity 250ms ease-out';
-                    posterCanvas.style.pointerEvents = 'none';
-                    posterCanvas.style.opacity = '1';
-
-                    posterContainer.appendChild(posterCanvas);
-
-                    // Decode at a lightweight size asynchronously
-                    import('../utils/BlurHashDecoder.js')
-                        .then(({ default: BlurHashDecoder }) => {
-                            const pixels = BlurHashDecoder.decode(posterBlurHash, 32, 48);
-                            if (pixels && posterCanvas) {
-                                posterCanvas.width = 32;
-                                posterCanvas.height = 48;
-                                const ctx = posterCanvas.getContext('2d');
-                                const imageData = ctx.createImageData(32, 48);
-                                imageData.data.set(pixels);
-                                ctx.putImageData(imageData, 0, 0);
-                            }
-                        })
-                        .catch((err) => log.error('Failed to decode poster blurhash', err));
-                }
-
-                const img = new Image();
-                img.onload = () => {
-                    img.classList.add('loaded');
-                    // Fade out and remove canvas when image loads
-                    if (posterCanvas) {
-                        posterCanvas.style.opacity = '0';
-                        setTimeout(() => {
-                            if (posterCanvas && posterCanvas.parentNode) {
-                                posterCanvas.parentNode.removeChild(posterCanvas);
-                            }
-                        }, 250);
-                    }
-                    onPosterReady();
-                };
-                img.onerror = () => {
-                    onPosterReady();
-                };
-                img.src = posterUrl;
-                img.alt = item.Name;
-                posterContainer.appendChild(img);
-            } else {
-                // No primary image, show gradient fallback
-                const isLandscape = posterType === 'landscape';
-                posterContainer.innerHTML = CardRenderer.getFallbackHtml(item, isLandscape);
-                onPosterReady();
-            }
-
-            // Backdrop (Fire and forget, via Manager)
-            const params = imageService.getParams('details-backdrop');
-            const backdropUrl = BackdropManager.getBackdropUrl(item, {
+        if (item.ImageTags && item.ImageTags.Primary) {
+            const params = imageService.getParams('details-poster');
+            const posterUrl = api.getImageUrl(item.Id, 'Primary', {
                 maxWidth: params.maxWidth,
                 quality: params.quality
             });
 
-            // Resolve Backdrop BlurHash
-            let backdropBlurHash = '';
-            if (item.ImageBlurHashes?.Backdrop) {
-                const keys = Object.keys(item.ImageBlurHashes.Backdrop);
+            // Resolve Poster BlurHash
+            const isBlurHashDisabled = storage.getItem('litefin:disableBlurhash') === 'true';
+            let posterBlurHash = '';
+            if (!isBlurHashDisabled && item.ImageBlurHashes?.Primary) {
+                const keys = Object.keys(item.ImageBlurHashes.Primary);
                 if (keys.length > 0) {
-                    backdropBlurHash = item.ImageBlurHashes.Backdrop[keys[0]];
+                    posterBlurHash = item.ImageBlurHashes.Primary[keys[0]];
                 }
             }
 
-            if (backdropUrl) {
-                BackdropManager.applyBackdrop(this.$('#backdrop'), backdropUrl, backdropBlurHash);
+            // Render dynamic BlurHash canvas placeholder
+            let posterCanvas = null;
+            if (posterBlurHash) {
+                posterCanvas = document.createElement('canvas');
+                posterCanvas.className = 'blurhash-canvas poster-blurhash';
+                posterCanvas.style.position = 'absolute';
+                posterCanvas.style.top = '0';
+                posterCanvas.style.left = '0';
+                posterCanvas.style.width = '100%';
+
+                posterContainer.appendChild(posterCanvas);
+
+                // Decode at a lightweight size asynchronously
+                import('../utils/BlurHashDecoder.js')
+                    .then(({ default: BlurHashDecoder }) => {
+                        const pixels = BlurHashDecoder.decode(posterBlurHash, 32, 48);
+                        if (pixels && posterCanvas) {
+                            posterCanvas.width = 32;
+                            posterCanvas.height = 48;
+                            const ctx = posterCanvas.getContext('2d');
+                            const imageData = ctx.createImageData(32, 48);
+                            imageData.data.set(pixels);
+                            ctx.putImageData(imageData, 0, 0);
+                        }
+                    })
+                    .catch((err) => log.error('Failed to decode poster blurhash', err));
             }
+
+            const img = new Image();
+            img.onload = () => {
+                img.classList.add('loaded');
+                // Fade out and remove canvas when image loads
+                if (posterCanvas) {
+                    posterCanvas.style.opacity = '0';
+                    setTimeout(() => {
+                        if (posterCanvas && posterCanvas.parentNode) {
+                            posterCanvas.parentNode.removeChild(posterCanvas);
+                        }
+                    }, 250);
+                }
+            };
+            img.src = posterUrl;
+            img.alt = item.Name;
+            posterContainer.appendChild(img);
+        } else {
+            // No primary image, show gradient fallback
+            const isLandscape = posterType === 'landscape';
+            posterContainer.innerHTML = CardRenderer.getFallbackHtml(item, isLandscape);
+        }
+
+        // Backdrop (Fire and forget, via Manager)
+        const params = imageService.getParams('details-backdrop');
+        const backdropUrl = BackdropManager.getBackdropUrl(item, {
+            maxWidth: params.maxWidth,
+            quality: params.quality
         });
+
+        // Resolve Backdrop BlurHash
+        let backdropBlurHash = '';
+        if (item.ImageBlurHashes?.Backdrop) {
+            const keys = Object.keys(item.ImageBlurHashes.Backdrop);
+            if (keys.length > 0) {
+                backdropBlurHash = item.ImageBlurHashes.Backdrop[keys[0]];
+            }
+        }
+
+        if (backdropUrl) {
+            BackdropManager.applyBackdrop(this.$('#backdrop'), backdropUrl, backdropBlurHash);
+        }
     }
 
     async _loadSecondaryContent() {
         // Load additional data based on type
         if (this._item.Type === 'Series') {
-            await Promise.all([this._loadNextUp(), this._loadSeasons()]);
+            // Next Up is above Seasons visually
+            await this._loadNextUp();
+            await this._loadSeasons();
         } else if (this._item.Type === 'Season') {
+            this._parentSeries = state.get(`details:series:${this._item.SeriesId}`);
             await this._loadEpisodes(this._item.SeriesId, this._itemId);
         } else if (this._item.Type === 'Episode') {
+            this._parentSeries = state.get(`details:series:${this._item.SeriesId}`);
+            // More from Season is above Guest Stars visually
+            await this._loadMoreFromSeason();
             const hideCast = storage.getItem('pref:hideCastSection') === 'true';
-            const loads = [this._loadMoreFromSeason()];
             if (!hideCast) {
-                loads.push(this._loadGuestStars());
+                await this._loadGuestStars();
             } else {
-                // Ensure section is hidden if guest stars are skipped
                 const guestStarsSection = this.$('#guest-stars-section');
                 if (guestStarsSection) guestStarsSection.classList.add('hidden');
             }
-            await Promise.all(loads);
         } else if (this._item.Type === 'BoxSet') {
             await this._loadCollectionItems();
         } else if (this._item.Type === 'MusicAlbum') {
@@ -834,6 +911,11 @@ class DetailsPage extends Page {
             if (peopleSection) peopleSection.classList.add('hidden');
         }
 
+        // Additional Parts for multi-part video items (e.g. multi-part movies)
+        if (['Movie', 'Video'].includes(this._item?.Type) || this._item?.PartCount > 1) {
+            await this._loadAdditionalParts();
+        }
+
         // Special Features
         if (['Movie', 'Series', 'Season', 'Episode', 'Trailer', 'MusicVideo'].includes(this._item.Type)) {
             await this._loadSpecialFeatures();
@@ -841,13 +923,6 @@ class DetailsPage extends Page {
 
         // Load Artists (Music/Albums)
         await this._loadArtists();
-
-        // Already loaded via conditional above if MusicAlbum,
-        // but this ensures fallback or shared logic consistency
-        // await this._loadAlbumSongs();
-
-        // Load Logo (non-blocking, fire and forget)
-        this._loadLogo();
     }
 
     async _loadArtists() {
@@ -897,7 +972,7 @@ class DetailsPage extends Page {
                 ParentId: this._itemId,
                 IncludeItemTypes: 'Audio',
                 Recursive: true,
-                Fields: 'PrimaryImageAspectRatio,UserData,RunTimeTicks',
+                Fields: 'UserData,RunTimeTicks',
                 SortBy: 'ParentIndexNumber,IndexNumber,SortName'
             });
 
@@ -970,10 +1045,12 @@ class DetailsPage extends Page {
                 // Save focus context so Back navigation returns to the same card
                 const stateKey = `details:lastFocusedItem:${this._itemId}`;
                 if (card.dataset.itemId) {
-                    state.set(stateKey, {
-                        itemId: card.dataset.itemId,
-                        sectionId: 'details-playlist-items'
-                    });
+                    if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                        state.set(stateKey, {
+                            itemId: card.dataset.itemId,
+                            sectionId: 'details-playlist-items'
+                        });
+                    }
                     router.navigate(`/details/${card.dataset.itemId}`);
                 }
             }
@@ -1024,10 +1101,12 @@ class DetailsPage extends Page {
             onClick: (card) => {
                 const stateKey = `details:lastFocusedItem:${this._itemId}`;
                 if (card.dataset.itemId) {
-                    state.set(stateKey, {
-                        itemId: card.dataset.itemId,
-                        sectionId: 'details-songs'
-                    });
+                    if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                        state.set(stateKey, {
+                            itemId: card.dataset.itemId,
+                            sectionId: 'details-songs'
+                        });
+                    }
                     // Start playback directly for songs?
                     // Or navigate to song details?
                     // Jellyfin usually plays. Litefin usually navigates.
@@ -1118,73 +1197,114 @@ class DetailsPage extends Page {
         }
 
         try {
-            const [movies, shows] = await Promise.all([
-                api.getItems({
-                    ParentId: this._itemId,
-                    IncludeItemTypes: 'Movie',
-                    Recursive: true,
-                    Fields: 'PrimaryImageAspectRatio,ProductionYear',
-                    SortBy: sortBy,
-                    SortOrder: 'Ascending',
-                    Limit: 100 // Increased limit to capture larger collections
-                }),
-                api.getItems({
-                    ParentId: this._itemId,
-                    IncludeItemTypes: 'Series',
-                    Recursive: true,
-                    Fields: 'PrimaryImageAspectRatio,ProductionYear',
-                    SortBy: sortBy,
-                    SortOrder: 'Ascending',
-                    Limit: 100
-                })
-            ]);
+            // Fetch direct child items of the collection (matching Jellyfin-web behavior)
+            const response = await api.getItems({
+                ParentId: this._itemId,
+                Recursive: false,
+                Fields: 'ProductionYear,PrimaryImageAspectRatio',
+                SortBy: sortBy,
+                SortOrder: 'Ascending',
+                Limit: 300
+            });
 
-            const hasMovies = movies.Items && movies.Items.length > 0;
-            const hasShows = shows.Items && shows.Items.length > 0;
+            const allItems = response.Items || [];
 
-            // Determine what is ABOVE the collection rows (use dynamic helper)
-            const aboveCollection =
-                this._getPreviousVisibleSection('collection-movies-section')?.targetName || 'details-rich-meta';
+            // Define collection item type categories in order (matching Jellyfin-web)
+            const categories = [
+                {
+                    key: 'movies',
+                    sectionId: 'collection-movies-section',
+                    listId: 'collection-movies-row',
+                    filter: (item) => item.Type === 'Movie',
+                    isLandscape: false,
+                    cardType: 'poster'
+                },
+                {
+                    key: 'shows',
+                    sectionId: 'collection-shows-section',
+                    listId: 'collection-shows-row',
+                    filter: (item) => item.Type === 'Series',
+                    isLandscape: false,
+                    cardType: 'poster'
+                },
+                {
+                    key: 'episodes',
+                    sectionId: 'collection-episodes-section',
+                    listId: 'collection-episodes-row',
+                    filter: (item) => item.Type === 'Episode',
+                    isLandscape: true,
+                    cardType: 'thumb'
+                },
+                {
+                    key: 'videos',
+                    sectionId: 'collection-videos-section',
+                    listId: 'collection-videos-row',
+                    filter: (item) => item.MediaType === 'Video' && item.Type !== 'Movie' && item.Type !== 'Series' && item.Type !== 'Episode',
+                    isLandscape: true,
+                    cardType: 'thumb'
+                },
+                {
+                    key: 'albums',
+                    sectionId: 'collection-albums-section',
+                    listId: 'collection-albums-row',
+                    filter: (item) => item.Type === 'MusicAlbum',
+                    isLandscape: false,
+                    cardType: 'square'
+                },
+                {
+                    key: 'books',
+                    sectionId: 'collection-books-section',
+                    listId: 'collection-books-row',
+                    filter: (item) => item.Type === 'Book',
+                    isLandscape: false,
+                    cardType: 'poster'
+                },
+                {
+                    key: 'subcollections',
+                    sectionId: 'collection-subcollections-section',
+                    listId: 'collection-subcollections-row',
+                    filter: (item) => item.Type === 'BoxSet',
+                    isLandscape: false,
+                    cardType: 'poster'
+                }
+            ];
 
-            // Render Rows with correct UP linking
-            if (hasMovies) {
+            let remainingItems = [...allItems];
+            const activeSections = [];
+
+            // Render categorized rows
+            for (const cat of categories) {
+                const categoryItems = remainingItems.filter(cat.filter);
+                remainingItems = remainingItems.filter((i) => !cat.filter(i));
+
+                if (categoryItems.length > 0) {
+                    this._renderCollectionRow(
+                        cat.sectionId,
+                        cat.listId,
+                        categoryItems,
+                        null,
+                        cat.isLandscape,
+                        cat.cardType
+                    );
+                    activeSections.push(cat.sectionId);
+                }
+            }
+
+            // Render leftover "Other Items" row if any exist
+            if (remainingItems.length > 0) {
                 this._renderCollectionRow(
-                    'collection-movies-section',
-                    'collection-movies-row',
-                    movies.Items,
-                    aboveCollection
+                    'collection-other-section',
+                    'collection-other-row',
+                    remainingItems,
+                    null,
+                    false,
+                    'poster'
                 );
-            }
-            if (hasShows) {
-                // Shows row's UP goes to Movies (if exists) or to whatever is above collection
-                const showsUpTarget = hasMovies ? 'collection-movies-section' : aboveCollection;
-                this._renderCollectionRow(
-                    'collection-shows-section',
-                    'collection-shows-row',
-                    shows.Items,
-                    showsUpTarget
-                );
+                activeSections.push('collection-other-section');
             }
 
-            // Link Focus chain (DOWN direction)
-            // Whatever is above -> Movies -> Shows -> Next section
-            let lastSection = aboveCollection;
-
-            if (hasMovies) {
-                this._updateLeaveDown(lastSection, 'collection-movies-section');
-                lastSection = 'collection-movies-section';
-            }
-
-            if (hasShows) {
-                this._updateLeaveDown(lastSection, 'collection-shows-section');
-                lastSection = 'collection-shows-section';
-            }
-
-            // Link last collection row to whatever is next (People, Similar, etc.)
-            const nextSection = this._getNextVisibleSection(lastSection);
-            if (nextSection) {
-                this._updateLeaveDown(lastSection, nextSection.targetName);
-            }
+            // Rebuild focus navigation chain across active sections
+            this._rebuildNavigationChain();
         } catch (e) {
             log.warn('Failed to load collection items', e);
         }
@@ -1201,7 +1321,8 @@ class DetailsPage extends Page {
             focusSectionName,
             titleElText,
             cardType,
-            onClick
+            onClick,
+            currentIndex
         } = options;
 
         const section = this.$(`#${sectionId}`);
@@ -1228,7 +1349,8 @@ class DetailsPage extends Page {
             initialWindow: isLandscape ? 5 : Math.min(7, items.length),
             focusSectionId: focusSectionName,
             cardType: cardType,
-            renderCard: renderCard
+            renderCard: renderCard,
+            currentIndex: currentIndex
         });
 
         if (!this._virtualRows) this._virtualRows = {};
@@ -1245,20 +1367,34 @@ class DetailsPage extends Page {
         list.onclick = (e) => {
             const card = e.target.closest('.media-card');
             if (card) {
+                // -------------------------------------------------------------
+                // Block navigation events if the clicked card is unpressable
+                // (e.g. the active current episode card in siblings row).
+                // -------------------------------------------------------------
+                if (card.classList.contains('unpressable')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+
                 // Save clicked item for exact focus restoration, scoped by current page item ID
                 // to prevent child DetailsPages from consuming parent state
                 const stateKey = `details:lastFocusedItem:${this._itemId}`;
                 if (card.dataset.itemId) {
-                    state.set(stateKey, {
-                        itemId: card.dataset.itemId,
-                        sectionId: focusSectionName
-                    });
+                    if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                        state.set(stateKey, {
+                            itemId: card.dataset.itemId,
+                            sectionId: focusSectionName
+                        });
+                    }
                 } else if (card.dataset.id) {
                     // Fallback for some cards that might use data-id
-                    state.set(stateKey, {
-                        itemId: card.dataset.id,
-                        sectionId: focusSectionName
-                    });
+                    if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                        state.set(stateKey, {
+                            itemId: card.dataset.id,
+                            sectionId: focusSectionName
+                        });
+                    }
                 }
 
                 if (onClick) {
@@ -1328,13 +1464,14 @@ class DetailsPage extends Page {
         this._updateLeaveDown(upwardLink, focusSectionName);
     }
 
-    _renderCollectionRow(sectionId, listId, items, leaveUpTarget) {
+    _renderCollectionRow(sectionId, listId, items, leaveUpTarget, isLandscape = false, cardType = 'poster') {
         this._renderVirtualRow({
             sectionId: sectionId,
             listId: listId,
             items: items,
-            isLandscape: false,
-            renderCard: (item) => this._renderMediaCard(item, false, 'poster'),
+            isLandscape: isLandscape,
+            cardType: cardType,
+            renderCard: (item) => this._renderMediaCard(item, isLandscape, cardType),
             focusSectionName: sectionId,
             leaveUpTarget: leaveUpTarget || 'details-rich-meta'
         });
@@ -1878,43 +2015,97 @@ class DetailsPage extends Page {
     }
 
     _loadLogo() {
+        return this._loadLogoAsync();
+    }
+
+    /**
+     * Load the logo image and return a promise that resolves when the logo
+     * is loaded (or immediately if no logo exists).
+     * @returns {Promise<void>}
+     */
+    _loadLogoAsync() {
         const item = this._item;
-        // Check for Logo using ImageTags.Logo or ParentLogoImageTag
         const logoTag = item.ImageTags?.Logo || item.ParentLogoImageTag;
         const logoItemId = item.ImageTags?.Logo ? item.Id : item.ParentLogoItemId || item.SeriesId;
 
-        if (logoItemId && logoTag) {
-            const params = imageService.getParams('details-logo');
-            const logoUrl = api.getImageUrl(logoItemId, 'Logo', {
-                maxWidth: params.maxWidth,
-                quality: params.quality,
-                tag: logoTag
-            });
-            const img = new Image();
+        if (!logoItemId || !logoTag) return Promise.resolve();
+
+        const params = imageService.getParams('details-logo');
+        let titleStyle = storage.getItem('pref:detailsTitleStyle') || 'both';
+        const detailsLayout = storage.getItem('pref:detailsLayout') || 'posterLeft';
+        if (detailsLayout === 'backdropMinimal' || detailsLayout === 'backdropLeft') {
+            titleStyle = 'logo-only';
+        }
+        const isLogoOnly = titleStyle === 'logo-only';
+        let baseWidth = isLogoOnly ? 360 : 280;
+        let baseHeight = isLogoOnly ? 140 : 100;
+        if (detailsLayout === 'backdropMinimal' || detailsLayout === 'backdropLeft') {
+            baseWidth = 540;
+            baseHeight = 220;
+        }
+        const dpr = window.devicePixelRatio || 1;
+
+        const logoUrl = api.getImageUrl(logoItemId, 'Logo', {
+            fillWidth: Math.round(baseWidth * dpr),
+            fillHeight: Math.round(baseHeight * dpr),
+            quality: params.quality,
+            tag: logoTag
+        });
+        const img = new Image();
+        if (item.Type === 'Season' || item.Type === 'Episode') {
+            const targetId = item.SeriesId;
+            if (targetId) {
+                img.classList.add('clickable-logo');
+                img.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    log.info('Logo clicked, navigating to series details:', targetId);
+                    router.navigate(`/details/${targetId}`);
+                };
+            }
+        }
+
+        return new Promise((resolve) => {
             img.onload = () => {
                 const logoContainer = this.$('#details-logo');
                 if (logoContainer) {
+                    const aspect = img.naturalWidth / img.naturalHeight || 1;
+                    let maxW = isLogoOnly ? 360 : 280;
+                    let minHeight = isLogoOnly ? 60 : 50;
+                    let maxHeight = isLogoOnly ? 140 : 100;
+                    if (detailsLayout === 'backdropMinimal' || detailsLayout === 'backdropLeft') {
+                        maxW = 540;
+                        minHeight = 100;
+                        maxHeight = 220;
+                    }
+                    const targetHeight = maxW / aspect;
+                    const containerHeight = Math.min(maxHeight, Math.max(minHeight, Math.round(targetHeight)));
+
+                    logoContainer.style.height = `${containerHeight}px`;
+
                     logoContainer.innerHTML = '';
                     logoContainer.appendChild(img);
                     img.classList.add('loaded');
                 }
+                resolve();
             };
+            img.onerror = () => resolve();
             img.src = logoUrl;
-            // img.alt = item.Name + " Logo"; // Alt might show if transparent PNG fails?
-        }
+        });
     }
 
     /**
      * ========================================================================
      * Background Theme Song Loader and Player
      * ========================================================================
-     * Dynamically queries the theme media associated with the active item.
-     * If a theme song is available, compiles the stream source URL and initiates
-     * background score looping via ThemeSongPlayer.
+     * Dynamically queries the theme media associated with the active item on the server.
+     * Works for any media type (Movies, Series, Seasons, Episodes, Collections, etc.).
+     * If a theme song is available, compiles the authenticated stream source URL and initiates
+     * background score playback via ThemeSongPlayer.
      */
     async _playThemeSong() {
-        // Assert that the loaded item supports theme media playback
-        if (!['Series', 'Season', 'Episode'].includes(this._item.Type)) {
+        // Assert that the item details are fully loaded into memory before querying API
+        if (!this._item) {
             return;
         }
 
@@ -1979,7 +2170,10 @@ class DetailsPage extends Page {
         }
 
         const rating = item.OfficialRating;
-        const starRating = item.CommunityRating && shouldShowScore(item) ? `★ ${item.CommunityRating.toFixed(1)}` : '';
+        const starRating =
+            item.CommunityRating && shouldShowScore(item)
+                ? `${detailsIcons.ratingStar}${item.CommunityRating.toFixed(1)}`
+                : '';
         const criticRating = item.CriticRating && shouldShowScore(item) ? `🍅 ${item.CriticRating}` : '';
 
         let metaHtml = '';
@@ -2016,9 +2210,11 @@ class DetailsPage extends Page {
         } else {
             metaHtml += addedHtml + airedHtml;
         }
-        // Retrieve the user's preferred title display style from localized preferences.
-        // Default style is 'both' (displaying both text title and logo icon).
-        const titleStyle = storage.getItem('pref:detailsTitleStyle') || 'both';
+        let titleStyle = storage.getItem('pref:detailsTitleStyle') || 'both';
+        const detailsLayout = storage.getItem('pref:detailsLayout') || 'posterLeft';
+        if (detailsLayout === 'backdropMinimal' || detailsLayout === 'backdropLeft') {
+            titleStyle = 'logo-only';
+        }
 
         // Retrieve and check for logo references using Jellyfin image tags.
         // Determines if a localized image tag or series/parent image tag is available.
@@ -2064,8 +2260,8 @@ class DetailsPage extends Page {
             isSeason
                 ? item.Name
                 : !hideOriginalTitle && item.OriginalTitle && item.OriginalTitle !== item.Name
-                  ? item.OriginalTitle
-                  : ''
+                    ? item.OriginalTitle
+                    : ''
         );
 
         // Build the dynamic inner HTML for the hero-info block.
@@ -2080,12 +2276,12 @@ class DetailsPage extends Page {
         if (showTitle) {
             // If there is no logo displayed, style the title to span the full width of the container.
             const titleStyleAttr = !showLogo ? 'style="max-width: 100%;"' : '';
-            heroHtml += `<h1 class="details-title" ${titleStyleAttr}>${displayTitle}</h1>`;
+            heroHtml += `<h1 class="details-title" ${titleStyleAttr}>${escapeHtml(displayTitle)}</h1>`;
         }
 
         // Add the subtitle element underneath if present.
         if (displaySubtitle && displaySubtitle !== displayTitle) {
-            heroHtml += `<h2 class="details-original-title">${displaySubtitle}</h2>`;
+            heroHtml += `<h2 class="details-original-title">${escapeHtml(displaySubtitle)}</h2>`;
         }
 
         // Render episode season/number details for TV episodes.
@@ -2106,7 +2302,10 @@ class DetailsPage extends Page {
                 ? `${seasonPrefix}${episodePrefix} - ${item.Name}`
                 : `${seasonPrefix}${episodePrefix} - ${item.SeriesName}`;
 
-            heroHtml += `<p class="details-episode-info clickable-subtitle" id="episode-subtitle-link">${i18n.ensureBiDi(subtitleText)}</p>`;
+            const useSecondaryColor = storage.getItem('pref:secondaryTitleSecondaryColor') !== 'false';
+            const colorClass = useSecondaryColor ? 'secondary-color' : '';
+
+            heroHtml += `<p class="details-episode-info clickable-subtitle ${colorClass}" id="episode-subtitle-link">${escapeHtml(i18n.ensureBiDi(subtitleText))}</p>`;
         }
 
         // Finish appending standard metadata row and secondary date labels.
@@ -2151,7 +2350,8 @@ class DetailsPage extends Page {
             taglineEl.style.display = tagline ? 'block' : 'none';
         }
 
-        overviewEl.textContent = item.Overview || '';
+        overviewEl.innerHTML = item.Overview || '';
+        overviewEl.querySelectorAll('a').forEach((anchor) => anchor.setAttribute('tabindex', '-1'));
 
         // Reset state
         overviewEl.classList.add('line-clamp-6');
@@ -2305,10 +2505,32 @@ class DetailsPage extends Page {
             }
         }
 
+        // Ghost Mode button visibility
+        const ghostBtn = this.$('.ghost-btn');
+        if (ghostBtn) {
+            // Check if SyncPlay is currently active.
+            const isSyncPlayActive = window.__syncPlayManager && window.__syncPlayManager.isEnabled;
+
+            // Check if user has toggled the preference option to hide the button entirely.
+            const isHiddenByPref = storage.getItem('pref:hideGhostMode') === 'true';
+
+            // Determine playability (non-photos and not in sync play, and not hidden by user preference).
+            const isPlayable = item.Type !== 'Photo' && !isSyncPlayActive && !isHiddenByPref;
+
+            // Toggle visibility classes and keyboard accessibility index dynamically.
+            if (isPlayable) {
+                ghostBtn.classList.remove('hidden');
+                ghostBtn.setAttribute('tabindex', '0');
+            } else {
+                ghostBtn.classList.add('hidden');
+                ghostBtn.setAttribute('tabindex', '-1');
+            }
+        }
+
         // Photo overrides for Action Buttons
         if (item.Type === 'Photo') {
             if (playBtn) {
-                const playIcon = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
+                const playIcon = detailsIcons.photo;
                 playBtn.innerHTML = `${playIcon} <span>${i18n.t('ViewPhoto') || 'View Photo'}</span>`;
                 playBtn.onclick = () => {
                     const parentId = this._item.LibraryId || this._item.ParentId || state.get('activeLibraryId') || '';
@@ -2328,46 +2550,57 @@ class DetailsPage extends Page {
             }
         }
 
-        // Upgrade to primary style
-        resumeBtn.classList.remove('btn-secondary');
-        resumeBtn.classList.add('btn-primary');
+        // The label/style/focus handoff below only applies when Resume is actually
+        // the active button (i.e. a resume point exists) — guard it the same way
+        // visibility was gated above so it doesn't steal focus from Play when there's
+        // nothing to resume.
+        if (userData.PlaybackPositionTicks > 0) {
+            // Upgrade to primary style
+            resumeBtn.classList.remove('btn-secondary');
+            resumeBtn.classList.add('btn-primary');
 
-        // Retrieve the resume position from UserData playback position.
-        // Convert playback ticks to total minutes. Note that 1 minute is equivalent to 600,000,000 ticks.
-        const resumeTime = Math.round(userData.PlaybackPositionTicks / 600000000);
+            // Retrieve the resume position from UserData playback position.
+            // Convert playback ticks to total minutes. Note that 1 minute is equivalent to 600,000,000 ticks.
+            const resumeTime = Math.round(userData.PlaybackPositionTicks / 600000000);
 
-        // Define a variable to store our sleekly formatted timestamp string.
-        let timeString = '';
+            // Define a variable to store our sleekly formatted timestamp string.
+            let timeString = '';
 
-        // Check if the user has watched past 59 minutes (i.e. at least 60 minutes).
-        // If so, we format the time using a premium hour-and-minute pattern (e.g., "1h 15m").
-        if (resumeTime >= 60) {
-            // Compute the absolute number of whole hours.
-            const hours = Math.floor(resumeTime / 60);
-            // Calculate the remaining minutes left over.
-            const minutes = resumeTime % 60;
+            // Check if the user has watched past 59 minutes (i.e. at least 60 minutes).
+            // If so, we format the time using a premium hour-and-minute pattern (e.g., "1h 15m").
+            if (resumeTime >= 60) {
+                // Compute the absolute number of whole hours.
+                const hours = Math.floor(resumeTime / 60);
+                // Calculate the remaining minutes left over.
+                const minutes = resumeTime % 60;
 
-            // Format the string elegantly. If there are no remaining minutes (e.g. exactly 1 hour),
-            // show only the hour to maintain a clean and beautiful Apple-like minimal aesthetic.
-            timeString = minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-        } else {
-            // Under 60 minutes, display in simple minute format (e.g., "45m").
-            timeString = `${resumeTime}m`;
+                // Format the string elegantly. If there are no remaining minutes (e.g. exactly 1 hour),
+                // show only the hour to maintain a clean and beautiful minimal aesthetic.
+                timeString = minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+            } else {
+                // Under 60 minutes, display in simple minute format (e.g., "45m").
+                timeString = `${resumeTime}m`;
+            }
+
+            // Apply localization to the formatted time label to construct the full button label text.
+            const resumeLabel = i18n.t('ResumeAt', [timeString]);
+
+            // Update the inner HTML of the resume button with a play icon and the formatted label.
+            resumeBtn.innerHTML = `${detailsIcons.play} <span>${resumeLabel}</span>`;
+
+            // We hid the Play button, so move focus to the Resume button.
+            resumeBtn.focus();
         }
 
-        // Apply localization to the formatted time label to construct the full button label text.
-        const resumeLabel = i18n.t('ResumeAt', [timeString]);
-
-        // Update the inner HTML of the resume button with a play icon and the formatted label.
-        resumeBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> <span>${resumeLabel}</span>`;
-
-        // CRITICAL: If we hid the Play button (which probably had focus or would get it),
-        // we must manually force focus to the Resume button so focus isn't lost.
-        requestAnimationFrame(() => {});
-
         // Watched button
-        if (userData.Played) {
-            if (watchedBtn) watchedBtn.classList.add('active');
+        if (watchedBtn) {
+            if (userData.Played) {
+                watchedBtn.classList.add('active');
+                watchedBtn.innerHTML = detailsIcons.watchedFilled;
+            } else {
+                watchedBtn.classList.remove('active');
+                watchedBtn.innerHTML = detailsIcons.watchedOutline;
+            }
         }
 
         // Shuffle Button Visibility
@@ -2380,7 +2613,7 @@ class DetailsPage extends Page {
                 shuffleBtn.classList.remove('hidden');
                 shuffleBtn.setAttribute('tabindex', '0');
                 shuffleBtn.setAttribute('aria-label', i18n.t('Slideshow') || 'Slideshow');
-                const playIcon = `<svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>`;
+                const playIcon = detailsIcons.playLarge;
                 shuffleBtn.innerHTML = playIcon;
                 shuffleBtn.onclick = () => {
                     // Slideshow auto-starts via query param if we wanted, but right now SlideshowPage
@@ -2467,8 +2700,45 @@ class DetailsPage extends Page {
     }
 
     async _loadNextUp() {
+        // =====================================================================
+        // Performance & Visibility Control Check
+        // =====================================================================
+        // Check if the user has enabled the "Hide Next Up" setting.
+        // By handling this check first, we short-circuit fetching Next Up items,
+        // avoiding unnecessary network calls and conserving VRAM on TV hardware.
+        // =====================================================================
+        const hideNextUp = storage.getItem('pref:hideNextUpSection') === 'true';
+        if (hideNextUp) {
+            const nextUpSection = this.$('#next-up-section');
+            if (nextUpSection) {
+                nextUpSection.classList.add('hidden');
+            }
+            return;
+        }
+
         try {
-            const response = await api.getNextUp({ SeriesId: this._itemId, Limit: 1 });
+            let response;
+
+            // Check if the current server is Emby. Emby ignores the SeriesId parameter
+            // on the /Shows/NextUp endpoint, so we fall back to querying the first
+            // unplayed episode of the series via /Items, which matches NextUp logic.
+            if (api.isEmby()) {
+                // Fetch the oldest unplayed episode of this series.
+                response = await api.getItems({
+                    ParentId: this._itemId,
+                    Recursive: true,
+                    IncludeItemTypes: 'Episode',
+                    Limit: 1,
+                    Filters: 'IsUnplayed',
+                    SortBy: 'ParentIndexNumber,IndexNumber',
+                    // Request all necessary fields for rendering the next up card.
+                    Fields: 'Overview,RunTimeTicks,CommunityRating,PremiereDate,IndexNumber,ParentIndexNumber,SeriesThumbImageTag,ParentThumbImageTag,BackdropImageTags,ParentBackdropImageTags'
+                });
+            } else {
+                // For Jellyfin, use the standard NextUp endpoint which filters by SeriesId correctly.
+                response = await api.getNextUp({ SeriesId: this._itemId, Limit: 1 });
+            }
+
             this._nextUp = response.Items || [];
 
             if (this._nextUp.length > 0) {
@@ -2483,6 +2753,107 @@ class DetailsPage extends Page {
     }
 
     _renderNextUp() {
+        const episodeLayout = storage.getItem('pref:episodeLayout') || 'list';
+        if (episodeLayout === 'list') {
+            const container = this.$('#next-up-row');
+            const section = this.$('#next-up-section');
+            if (!section || !container || !this._nextUp || this._nextUp.length === 0) return;
+
+            section.classList.remove('hidden');
+            section.classList.remove('media-row');
+            container.classList.add('vertical-list');
+
+            let html = '<div class="episode-list-container" style="padding-bottom: 0;">';
+            this._nextUp.forEach((ep) => {
+                const progress =
+                    ep.UserData?.PlaybackPositionTicks && ep.RunTimeTicks
+                        ? (ep.UserData.PlaybackPositionTicks / ep.RunTimeTicks) * 100
+                        : 0;
+                const progressHtml = progress > 0 ? `<div style="position: absolute; bottom: 0; left: 0; width: 100%; height: 6px; background-color: rgba(0,0,0,0.7); z-index: 100;"><div style="width: ${progress}%; height: 100%; background-color: var(--jf-accent);"></div></div>` : '';
+
+                const playedBadgeHtml = CardRenderer.getPlayedBadgeHtml(ep);
+                const qualityBadgeHtml = CardRenderer.getQualityBadgeHtml(ep);
+
+                const imgUrl = api.getImageUrl(ep.Id, 'Primary', { maxWidth: imageService.getParams('thumb').maxWidth, quality: imageService.getParams('thumb').quality });
+                const episodeTitle = i18n.ensureBiDi(ep.Name);
+                const episodePrefix = ep.ParentIndexNumber && ep.IndexNumber ? `S${ep.ParentIndexNumber}E${ep.IndexNumber}. ` : ep.IndexNumber ? `${ep.IndexNumber}. ` : '';
+
+                const rating = ep.CommunityRating && shouldShowScore(ep) ? `⭐ ${ep.CommunityRating.toFixed(1)}` : '';
+                let runtimeText = '';
+                if (ep.RunTimeTicks) {
+                    const mins = Math.round(ep.RunTimeTicks / 600000000);
+                    runtimeText = `${mins}m`;
+                }
+                let endsAtText = '';
+                if (ep.RunTimeTicks) {
+                    const endTime = new Date(Date.now() + ep.RunTimeTicks / 10000);
+                    const timeString = i18n.formatLocalTime(endTime);
+                    endsAtText = i18n.t('EndsAtValue', [timeString]);
+                }
+
+                html += `
+                    <div class="episode-row">
+                        <button class="episode-row-card media-card" data-episode-id="${ep.Id}" data-item-id="${ep.Id}" tabindex="0">
+                            <div class="episode-row-thumb">
+                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="${imgUrl}" alt="" class="lazy">
+                                ${playedBadgeHtml}
+                                ${qualityBadgeHtml}
+                                ${progressHtml}
+                            </div>
+                            <div class="episode-row-info">
+                                <div class="episode-row-title">${episodePrefix}${episodeTitle}</div>
+                                <div class="episode-row-meta">
+                                    ${rating ? `<span class="episode-row-rating">${detailsIcons.ratingStar}${ep.CommunityRating.toFixed(1)}</span>` : ''}
+                                    ${runtimeText ? `<span>${runtimeText}</span>` : ''}
+                                    ${endsAtText ? `<span>${endsAtText}</span>` : ''}
+                                </div>
+                                <div class="episode-row-overview">${ep.Overview || ''}</div>
+                            </div>
+                        </button>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            container.innerHTML = html;
+
+            container.onclick = (e) => {
+                const card = e.target.closest('.media-card');
+                if (card && card.dataset.itemId) {
+                    const stateKey = `details:lastFocusedItem:${this._itemId}`;
+                    if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                        state.set(stateKey, {
+                            itemId: card.dataset.itemId,
+                            sectionId: 'details-next-up'
+                        });
+                    }
+                    router.navigate(`/details/${card.dataset.itemId}`);
+                }
+            };
+
+            lazyLoader.observe(container);
+
+            const upwardLink = this._getPreviousVisibleSection('details-next-up')?.targetName || 'details-actions';
+            const nextSection = this._getNextVisibleSection('details-next-up');
+            const leaveDownTarget = nextSection ? nextSection.targetName : null;
+
+            this.registerFocusSection('details-next-up', container, {
+                orientation: 'vertical',
+                leaveUp: upwardLink,
+                leaveDown: leaveDownTarget,
+                leaveLeft: 'sidebar',
+                onEnter: (fromElement, options) => {
+                    if (!this._hasEnteredNextUpGrid) {
+                        this._hasEnteredNextUpGrid = true;
+                        return container.querySelector('.media-card');
+                    }
+                    return null;
+                }
+            });
+
+            this._updateLeaveDown(upwardLink, 'details-next-up');
+            return;
+        }
+
         this._renderVirtualRow({
             sectionId: 'next-up-section',
             listId: 'next-up-row',
@@ -2521,9 +2892,20 @@ class DetailsPage extends Page {
     }
 
     async _loadEpisodes(seriesId, seasonId) {
+        const cacheKey = `details:episodes:${seriesId}:${seasonId}`;
+        const cached = state.get(cacheKey);
+        if (cached) {
+            this._episodes = cached;
+            if (this._episodes.length > 0) {
+                this._renderEpisodes();
+            }
+            return;
+        }
+
         try {
             const response = await api.getEpisodes(seriesId, { SeasonId: seasonId });
             this._episodes = response.Items || [];
+            state.set(cacheKey, this._episodes);
 
             if (this._episodes.length > 0) {
                 this._renderEpisodes();
@@ -2543,54 +2925,191 @@ class DetailsPage extends Page {
         section.classList.remove('hidden');
 
         if (this._item.Type === 'Season') {
-            // Remove 'media-row' to prevent ScrollController from aggressively top-snapping this entire deep grid
+            // Remove 'media-row' to prevent ScrollController from aggressively top-snapping this entire deep layout
             section.classList.remove('media-row');
-            // Use MediaGrid for a clean, generic 2D landscape episode layout
-            this._episodeGrid = new MediaGrid({
-                id: 'season-episodes-grid',
-                items: this._episodes,
-                type: 'episode',
-                contextType: 'details',
-                limit: 60,
-                moreUrl: `/library/all?parentId=${this._itemId}&includeItemTypes=Episode&viewModeIndex=2`,
-                isLandscape: true,
-                onClick: (card) => {
-                    const stateKey = `details:lastFocusedItem:${this._itemId}`;
-                    if (card.dataset.itemId) {
-                        state.set(stateKey, {
-                            itemId: card.dataset.itemId,
-                            sectionId: 'details-episodes'
-                        });
-                        router.navigate(`/details/${card.dataset.itemId}`);
+
+            const episodeLayout = storage.getItem('pref:episodeLayout') || 'list';
+
+            if (episodeLayout === 'list') {
+                container.classList.add('vertical-list');
+
+                // ====================================================================
+                // Premium List with Details Layout
+                // ====================================================================
+                // Render episode cards in a clean, vertical scrollable column:
+                // - Thumbnail on the left with a subtle rounded cover design and progress indicators.
+                // - High-contrast text stack on the right: SxxExx index code, clear title,
+                //   ratings & duration metadata row, and overview line clamping.
+                // ====================================================================
+                const limit = 30;
+                const episodesToShow = this._episodes.slice(0, limit);
+                const hasMore = this._episodes.length > limit;
+
+                let html = '<div class="episode-list-container">';
+                episodesToShow.forEach((ep) => {
+                    const progress =
+                        ep.UserData?.PlaybackPositionTicks && ep.RunTimeTicks
+                            ? (ep.UserData.PlaybackPositionTicks / ep.RunTimeTicks) * 100
+                            : 0;
+                    const progressHtml =
+                        progress > 0
+                            ? `<div style="position: absolute; bottom: 0; left: 0; width: 100%; height: 6px; background-color: rgba(0,0,0,0.7); z-index: 100;"><div style="width: ${progress}%; height: 100%; background-color: var(--jf-accent);"></div></div>`
+                            : '';
+
+                    const playedBadgeHtml = CardRenderer.getPlayedBadgeHtml(ep);
+                    const qualityBadgeHtml = CardRenderer.getQualityBadgeHtml(ep);
+
+                    const imgUrl = api.getImageUrl(ep.Id, 'Primary', {
+                        maxWidth: imageService.getParams('thumb').maxWidth,
+                        quality: imageService.getParams('thumb').quality
+                    });
+                    const episodeCode = i18n.ensureBiDi(
+                        `S${(ep.ParentIndexNumber || 0).toString().padStart(2, '0')}E${(ep.IndexNumber || 0).toString().padStart(2, '0')}`
+                    );
+                    const episodeTitle = i18n.ensureBiDi(ep.Name);
+
+                    const rating = ep.CommunityRating && shouldShowScore(ep) ? `⭐ ${ep.CommunityRating.toFixed(1)}` : '';
+                    let runtimeText = '';
+                    if (ep.RunTimeTicks) {
+                        const mins = Math.round(ep.RunTimeTicks / 600000000);
+                        runtimeText = `${mins}m`;
                     }
-                }
-            });
-
-            container.innerHTML = this._episodeGrid.render();
-            this._episodeGrid.onMounted(); // Wire up generic grid router links
-
-            // Register focus section for grid
-            const upwardLink = this._getPreviousVisibleSection('details-episodes')?.targetName || 'details-actions';
-            const nextSection = this._getNextVisibleSection('details-episodes');
-            const leaveDownTarget = nextSection ? nextSection.targetName : null;
-
-            this.registerFocusSection('details-episodes', container, {
-                orientation: 'grid',
-                leaveUp: upwardLink,
-                leaveDown: leaveDownTarget,
-                leaveLeft: 'sidebar',
-                onEnter: (fromElement, options) => {
-                    // Only assert focus on the first item for the very first entry.
-                    // Afterwards, let FocusManager use standard spatial/memory routing.
-                    if (!this._hasEnteredEpisodesGrid) {
-                        this._hasEnteredEpisodesGrid = true;
-                        return container.querySelector('.media-card');
+                    let endsAtText = '';
+                    if (ep.RunTimeTicks) {
+                        const endTime = new Date(Date.now() + ep.RunTimeTicks / 10000);
+                        const timeString = i18n.formatLocalTime(endTime);
+                        endsAtText = i18n.t('EndsAtValue', [timeString]);
                     }
-                    return null;
-                }
-            });
 
-            this._updateLeaveDown(upwardLink, 'details-episodes');
+                    html += `
+                        <div class="episode-row">
+                            <button class="episode-row-card media-card" data-episode-id="${ep.Id}" data-item-id="${ep.Id}" tabindex="0">
+                                <div class="episode-row-thumb">
+                                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="${imgUrl}" alt="" class="lazy">
+                                    ${playedBadgeHtml}
+                                    ${qualityBadgeHtml}
+                                    ${progressHtml}
+                                </div>
+                                <div class="episode-row-info">
+                                    <div class="episode-row-title">${ep.IndexNumber || 0}. ${episodeTitle}</div>
+                                    <div class="episode-row-meta">
+                                        ${rating ? `<span class="episode-row-rating">${detailsIcons.ratingStar}${ep.CommunityRating.toFixed(1)}</span>` : ''}
+                                        ${runtimeText ? `<span>${runtimeText}</span>` : ''}
+                                        ${endsAtText ? `<span>${endsAtText}</span>` : ''}
+                                    </div>
+                                    <p class="episode-row-overview">${ep.Overview || ''}</p>
+                                </div>
+                            </button>
+                        </div>
+                    `;
+                });
+
+                if (hasMore) {
+                    const moreUrl = `/library/all?parentId=${this._itemId}&includeItemTypes=Episode&viewModeIndex=2`;
+                    html += `
+                        <div class="episode-row">
+                            <button class="episode-row-card media-card see-more-card" data-more-url="${moreUrl}" tabindex="0" style="justify-content: center; align-items: center; background: rgba(0, 0, 0, 0.5); border: 2px dashed rgba(255, 255, 255, 0.15);">
+                                <span style="font-size: 1.4rem; font-weight: 600; color: var(--jf-text-secondary);">${i18n.t('ShowMore') || 'See More'}</span>
+                            </button>
+                        </div>
+                    `;
+                }
+
+                html += '</div>';
+                container.innerHTML = html;
+
+                // Wire up click event delegation for navigating to details
+                container.onclick = (e) => {
+                    const card = e.target.closest('.media-card');
+                    if (card) {
+                        if (card.classList.contains('see-more-card')) {
+                            router.navigate(card.dataset.moreUrl);
+                            return;
+                        }
+                        const stateKey = `details:lastFocusedItem:${this._itemId}`;
+                        if (card.dataset.itemId) {
+                            if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                                state.set(stateKey, {
+                                    itemId: card.dataset.itemId,
+                                    sectionId: 'details-episodes'
+                                });
+                            }
+                            router.navigate(`/details/${card.dataset.itemId}`);
+                        }
+                    }
+                };
+
+                lazyLoader.observe(container);
+
+                // Register vertical list navigation constraints
+                const upwardLink = this._getPreviousVisibleSection('details-episodes')?.targetName || 'details-actions';
+                const nextSection = this._getNextVisibleSection('details-episodes');
+                const leaveDownTarget = nextSection ? nextSection.targetName : null;
+
+                this.registerFocusSection('details-episodes', container, {
+                    orientation: 'vertical',
+                    leaveUp: upwardLink,
+                    leaveDown: leaveDownTarget,
+                    leaveLeft: 'sidebar',
+                    onEnter: (fromElement, options) => {
+                        if (!this._hasEnteredEpisodesGrid) {
+                            this._hasEnteredEpisodesGrid = true;
+                            return container.querySelector('.media-card');
+                        }
+                        return null;
+                    }
+                });
+
+                this._updateLeaveDown(upwardLink, 'details-episodes');
+            } else {
+                container.classList.remove('vertical-list');
+                // Use MediaGrid for a clean, generic 2D landscape episode layout
+                this._episodeGrid = new MediaGrid({
+                    id: 'season-episodes-grid',
+                    items: this._episodes,
+                    type: 'episode',
+                    contextType: 'details',
+                    limit: 60,
+                    moreUrl: `/library/all?parentId=${this._itemId}&includeItemTypes=Episode&viewModeIndex=2`,
+                    isLandscape: true,
+                    onClick: (card) => {
+                        const stateKey = `details:lastFocusedItem:${this._itemId}`;
+                        if (card.dataset.itemId) {
+                            if (storage.getItem('pref:disableFocusRestore') !== 'true') {
+                                state.set(stateKey, {
+                                    itemId: card.dataset.itemId,
+                                    sectionId: 'details-episodes'
+                                });
+                            }
+                            router.navigate(`/details/${card.dataset.itemId}`);
+                        }
+                    }
+                });
+
+                container.innerHTML = this._episodeGrid.render();
+                this._episodeGrid.onMounted(); // Wire up generic grid router links
+
+                // Register focus section for grid
+                const upwardLink = this._getPreviousVisibleSection('details-episodes')?.targetName || 'details-actions';
+                const nextSection = this._getNextVisibleSection('details-episodes');
+                const leaveDownTarget = nextSection ? nextSection.targetName : null;
+
+                this.registerFocusSection('details-episodes', container, {
+                    orientation: 'grid',
+                    leaveUp: upwardLink,
+                    leaveDown: leaveDownTarget,
+                    leaveLeft: 'sidebar',
+                    onEnter: (fromElement, options) => {
+                        if (!this._hasEnteredEpisodesGrid) {
+                            this._hasEnteredEpisodesGrid = true;
+                            return container.querySelector('.media-card');
+                        }
+                        return null;
+                    }
+                });
+
+                this._updateLeaveDown(upwardLink, 'details-episodes');
+            }
         } else {
             // Horizontal episode cards (for Series NextUp, etc.) require 'media-row' for correct horizontal snap scrolling
             section.classList.add('media-row');
@@ -2665,6 +3184,21 @@ class DetailsPage extends Page {
         });
     }
 
+    /**
+     * Opens the full overview description in a scrollable dialog modal.
+     */
+    _showFullOverview() {
+        if (!this._item) return;
+
+        DescriptionModal.show(
+            {
+                title: this._item.Name,
+                overview: this._item.Overview
+            },
+            this
+        );
+    }
+
     _checkOverviewTruncation() {
         const overviewEl = this.$('.overview-text');
         const seeMoreBtn = this.$('.see-more-btn');
@@ -2685,25 +3219,6 @@ class DetailsPage extends Page {
 
             // 3. Link Actions -> See More
             this._updateLeaveDown('details-actions', 'details-see-more');
-
-            // Handle Click (Toggle)
-            seeMoreBtn.onclick = () => {
-                const isExpanded = !overviewEl.classList.contains('line-clamp-6');
-
-                if (isExpanded) {
-                    // Collapse
-                    overviewEl.classList.add('line-clamp-6');
-                    seeMoreBtn.textContent = i18n.t('ShowMore');
-                    this.el.scrollTop = 0; // Optional: Reset scroll
-                } else {
-                    // Expand
-                    overviewEl.classList.remove('line-clamp-6');
-                    seeMoreBtn.textContent = i18n.t('ShowLess');
-                }
-
-                // Keep focus on the button using precision scroll
-                focusManager.focusElement(seeMoreBtn);
-            };
         }
     }
 
@@ -2736,6 +3251,36 @@ class DetailsPage extends Page {
                 elementId: '#collection-shows-row',
                 isVisible: () => isNotHidden('#collection-shows-section')
             },
+            'collection-episodes-section': {
+                name: 'collection-episodes-section',
+                elementId: '#collection-episodes-row',
+                isVisible: () => isNotHidden('#collection-episodes-section')
+            },
+            'collection-videos-section': {
+                name: 'collection-videos-section',
+                elementId: '#collection-videos-row',
+                isVisible: () => isNotHidden('#collection-videos-section')
+            },
+            'collection-albums-section': {
+                name: 'collection-albums-section',
+                elementId: '#collection-albums-row',
+                isVisible: () => isNotHidden('#collection-albums-section')
+            },
+            'collection-books-section': {
+                name: 'collection-books-section',
+                elementId: '#collection-books-row',
+                isVisible: () => isNotHidden('#collection-books-section')
+            },
+            'collection-subcollections-section': {
+                name: 'collection-subcollections-section',
+                elementId: '#collection-subcollections-row',
+                isVisible: () => isNotHidden('#collection-subcollections-section')
+            },
+            'collection-other-section': {
+                name: 'collection-other-section',
+                elementId: '#collection-other-row',
+                isVisible: () => isNotHidden('#collection-other-section')
+            },
             'details-playlist-items': {
                 name: 'details-playlist-items',
                 elementId: '#playlist-items-list',
@@ -2758,6 +3303,11 @@ class DetailsPage extends Page {
                 elementId: '#more-from-season-row',
                 isVisible: () => isNotHidden('#more-from-season-section')
             },
+            'details-additional-parts': {
+                name: 'details-additional-parts',
+                elementId: '#additional-parts-row',
+                isVisible: () => isNotHidden('#additional-parts-section')
+            },
             'details-people': { name: 'details-people', elementId: '#people-row', isVisible: () => isNotHidden('#people-section') },
             'details-special-features': {
                 name: 'details-special-features',
@@ -2774,6 +3324,11 @@ class DetailsPage extends Page {
                 elementId: '#guest-stars-row',
                 isVisible: () => isNotHidden('#guest-stars-section')
             },
+            'details-item-collections': {
+                name: 'details-item-collections',
+                elementId: '#item-collections-row',
+                isVisible: () => isNotHidden('#item-collections-section')
+            },
             'details-similar': { name: 'details-similar', elementId: '#similar-row', isVisible: () => isNotHidden('#similar-section') }
         };
     }
@@ -2783,19 +3338,27 @@ class DetailsPage extends Page {
             'details-actions',
             'details-see-more',
             'details-track-meta',
+            'details-rich-meta',
             'collection-movies-section',
             'collection-shows-section',
+            'collection-episodes-section',
+            'collection-videos-section',
+            'collection-albums-section',
+            'collection-books-section',
+            'collection-subcollections-section',
+            'collection-other-section',
             'details-playlist-items',
             'details-next-up',
             'details-seasons',
             'details-episodes',
             'details-songs',
             'more-from-season-section',
-            'details-rich-meta',
+            'details-additional-parts',
             'details-people',
             'details-special-features',
             'artists-section',
             'guest-stars-section',
+            'details-item-collections',
             'details-similar'
         ];
 
@@ -2805,16 +3368,24 @@ class DetailsPage extends Page {
             'details-rich-meta',
             'collection-movies-section',
             'collection-shows-section',
+            'collection-episodes-section',
+            'collection-videos-section',
+            'collection-albums-section',
+            'collection-books-section',
+            'collection-subcollections-section',
+            'collection-other-section',
             'details-playlist-items',
             'details-next-up',
             'details-seasons',
             'details-episodes',
             'details-songs',
             'more-from-season-section',
+            'details-additional-parts',
             'details-people',
             'details-special-features',
             'artists-section',
             'guest-stars-section',
+            'details-item-collections',
             'details-similar'
         ];
 
@@ -2858,27 +3429,45 @@ class DetailsPage extends Page {
     async _loadMoreFromSeason() {
         if (!this._item.SeasonId || !this._item.SeriesId) return;
 
-        try {
-            const response = await api.getEpisodes(this._item.SeriesId, {
-                SeasonId: this._item.SeasonId
-            });
-            const episodes = response.Items || [];
-            const hasCurrentEpisode = episodes.some((ep) => ep.Id === this._itemId);
-            const seasonEpisodes = hasCurrentEpisode
-                ? episodes
-                : [...episodes, this._item].sort((a, b) => (a.IndexNumber || 0) - (b.IndexNumber || 0));
+        const cacheKey = `details:episodes:${this._item.SeriesId}:${this._item.SeasonId}`;
+        let allItems = state.get(cacheKey);
 
-            if (seasonEpisodes.length > 0) {
-                this._renderMoreFromSeason(seasonEpisodes);
+        if (!allItems) {
+            try {
+                const response = await api.getEpisodes(this._item.SeriesId, {
+                    SeasonId: this._item.SeasonId
+                });
+                allItems = response.Items || [];
+                state.set(cacheKey, allItems);
+            } catch (error) {
+                log.warn('Failed to load more from season', error);
+                return;
             }
-        } catch (error) {
-            log.warn('Failed to load season episodes', error);
+        }
+
+        if (!allItems.some((episode) => episode.Id === this._itemId)) {
+            allItems = [...allItems, this._item].sort((a, b) => (a.IndexNumber || 0) - (b.IndexNumber || 0));
+        }
+
+        // -------------------------------------------------------------
+        // Retrieve preference to determine if we include current episode.
+        // Defaults to false.
+        // -------------------------------------------------------------
+        const includeCurrent = storage.getItem('pref:includeCurrentEpisodeInMoreFromSeason') === 'true';
+
+        // Filter out current episode if preference is disabled, and slice limits to 24 for the row.
+        const siblings = allItems.filter((ep) => includeCurrent || ep.Id !== this._itemId).slice(0, 24);
+
+        if (siblings.length > 0) {
+            // Find index of the current active episode in the siblings list
+            const currentEpisodeIndex = siblings.findIndex((ep) => ep.Id === this._itemId);
+
+            // Pass siblings and focused index down to renderer
+            this._renderMoreFromSeason(siblings, currentEpisodeIndex !== -1 ? currentEpisodeIndex : 0);
         }
     }
 
-    _renderMoreFromSeason(episodes) {
-        const currentEpisodeIndex = episodes.findIndex((ep) => ep.Id === this._itemId);
-
+    _renderMoreFromSeason(episodes, currentEpisodeIndex = 0) {
         this._renderVirtualRow({
             sectionId: 'more-from-season-section',
             listId: 'more-from-season-row',
@@ -2886,15 +3475,17 @@ class DetailsPage extends Page {
             isLandscape: true,
             titleElText: this._item.SeasonName
                 ? i18n.t('MoreFromValue', [
-                      this._item.SeasonName.toLowerCase().startsWith('season ')
-                          ? this._item.SeasonName.replace(/season\s+/i, i18n.t('Season') + ' ')
-                          : /^\d+$/.test(this._item.SeasonName)
+                    this._item.SeasonName.toLowerCase().startsWith('season ')
+                        ? this._item.SeasonName.replace(/season\s+/i, i18n.t('Season') + ' ')
+                        : /^\d+$/.test(this._item.SeasonName)
                             ? i18n.t('Season') + ' ' + this._item.SeasonName
                             : this._item.SeasonName
-                  ])
+                ])
                 : null,
             renderCard: (ep) => {
-                const html = this._renderMediaCard(ep, true, 'episode');
+                const html = this._renderMediaCard(ep, true, 'episode', {
+                    isCurrentEpisode: ep.Id === this._itemId
+                });
                 if (ep.Id !== this._itemId) return html;
 
                 return html
@@ -2910,7 +3501,8 @@ class DetailsPage extends Page {
                 }
 
                 router.navigate(`/details/${card.dataset.itemId}`);
-            }
+            },
+            currentIndex: currentEpisodeIndex
         });
 
         if (currentEpisodeIndex >= 0) {
@@ -3030,8 +3622,139 @@ class DetailsPage extends Page {
         });
     }
 
-    async _play({ resume = false, isShufflePlay = false } = {}) {
-        let itemToPlay = this._item;
+    /**
+     * Fetch additional video parts for multi-part items (e.g. Part 2, Part 3 of a multi-disc movie).
+     * Populates the Additional Parts section so users can view or start playback from any part.
+     */
+    async _loadAdditionalParts() {
+        if (!['Movie', 'Video'].includes(this._item?.Type) && !(this._item?.PartCount > 1)) {
+            return;
+        }
+
+        try {
+            log.info('Fetching additional parts for item ID:', this._itemId);
+
+            // Primary item ID to query additional parts for
+            const targetId = this._item.PrimaryItemId || this._itemId;
+            const response = await api.getAdditionalParts(targetId);
+            const additionalParts = response?.Items || [];
+
+            if (additionalParts.length > 0) {
+                log.info(`Loaded ${additionalParts.length} additional video part(s) for item ${targetId}`);
+
+                // If current item is the primary item (Part 1), compile full list [this._item, ...additionalParts]
+                const allParts = [this._item, ...additionalParts];
+
+                // Ensure each part has clean display indexing if missing from server payload
+                allParts.forEach((part, index) => {
+                    if (!part.PartIndex) {
+                        part.PartIndex = index + 1;
+                    }
+                });
+
+                this._renderAdditionalParts(allParts);
+            }
+        } catch (error) {
+            log.warn('Failed to load additional parts for item:', error);
+        }
+    }
+
+    /**
+     * Render the Additional Parts row using Virtual Card Row.
+     * Allows selecting and initiating playback directly from any specific part.
+     * @param {Object[]} parts - Array of video part items
+     */
+    _renderAdditionalParts(parts) {
+        const section = this.$('#additional-parts-section');
+        const container = this.$('#additional-parts-row');
+
+        if (!section || !container || !parts || parts.length === 0) return;
+
+        // Reveal the section on the Details Page
+        section.classList.remove('hidden');
+
+        // Render virtual horizontal card row for additional parts
+        this._renderVirtualRow({
+            sectionId: 'additional-parts-section',
+            listId: 'additional-parts-row',
+            items: parts,
+            isLandscape: true,
+            cardType: 'thumb',
+            renderCard: (partItem) => {
+                // Ensure card displays Part suffix if available
+                const partLabel = partItem.PartIndex ? ` (Part ${partItem.PartIndex})` : '';
+                const displayItem = {
+                    ...partItem,
+                    Name: partItem.Name?.includes('Part') ? partItem.Name : `${this._item.Name}${partLabel}`
+                };
+                return this._renderMediaCard(displayItem, true, 'thumb');
+            },
+            focusSectionName: 'details-additional-parts',
+            onClick: (card) => {
+                const targetItemId = card.dataset.itemId || card.dataset.id;
+                if (targetItemId) {
+                    log.info('Additional part card selected, launching playback from part ID:', targetItemId);
+                    const partToPlay = parts.find((p) => p.Id === targetItemId) || this._item;
+                    this._play({ targetItem: partToPlay });
+                }
+            }
+        });
+    }
+
+    async _loadItemCollections() {
+        try {
+            const cacheKey = `details:collections:${this._itemId}`;
+            let collections = state.get(cacheKey);
+
+            if (!collections) {
+                const response = await api.getItemCollections(this._itemId);
+                collections = response.Items || [];
+                if (collections.length > 0) {
+                    state.set(cacheKey, collections);
+                }
+            }
+
+            this._itemCollections = collections;
+
+            if (this._itemCollections.length > 0) {
+                this._renderItemCollections();
+            } else {
+                const section = this.$('#item-collections-section');
+                if (section) {
+                    section.classList.add('hidden');
+                }
+            }
+        } catch (error) {
+            log.debug('Item has no collections or failed to fetch collections', error?.message || error);
+            const section = this.$('#item-collections-section');
+            if (section) {
+                section.classList.add('hidden');
+            }
+        }
+    }
+
+    _renderItemCollections() {
+        if (!this._itemCollections || this._itemCollections.length === 0) return;
+
+        this._renderVirtualRow({
+            sectionId: 'item-collections-section',
+            listId: 'item-collections-row',
+            items: this._itemCollections,
+            isLandscape: false,
+            renderCard: (item) => {
+                return this._renderMediaCard(item, false, 'poster');
+            },
+            focusSectionName: 'details-item-collections',
+            cardType: 'poster'
+        });
+    }
+
+    async _play({ resume = false, isShufflePlay = false, ghostMode = false, targetItem = null } = {}) {
+        /*
+         * Allow initiating playback directly from a specific target item (e.g. Part 2 or Part 3
+         * selected from the Additional Parts section on the details page).
+         */
+        let itemToPlay = targetItem || this._item;
 
         // If it's a Live TV Program, play the parent Channel instead
         if (this._item.Type === 'Program' && this._item.ChannelId) {
@@ -3130,7 +3853,7 @@ class DetailsPage extends Page {
                 itemToPlay = { ...target };
             } else {
                 try {
-                    const fields = 'PrimaryImageAspectRatio,BasicSyncInfo,Overview,RunTimeTicks,Chapters';
+                    const fields = 'Overview,RunTimeTicks,Chapters';
                     if (isShufflePlay) {
                         const randomEp = await api.getItems({
                             ParentId: this._item.Id,
@@ -3151,7 +3874,7 @@ class DetailsPage extends Page {
                             Recursive: true,
                             IncludeItemTypes: 'Episode',
                             Limit: 1,
-                            SortBy: 'SortName',
+                            SortBy: 'ParentIndexNumber,IndexNumber',
                             Fields: fields
                         });
                         if (firstEp && firstEp.Items && firstEp.Items.length > 0) {
@@ -3192,7 +3915,24 @@ class DetailsPage extends Page {
                         }
                     } else {
                         // 1. Try to get "Next Up" for this series
-                        const nextUp = await api.getNextUp({ SeriesId: this._item.Id, Limit: 1 });
+                        let nextUp;
+                        if (api.isEmby()) {
+                            // On Emby, /Shows/NextUp does not filter by SeriesId.
+                            // We fetch the oldest unplayed episode of the series via /Items instead.
+                            nextUp = await api.getItems({
+                                ParentId: this._item.Id,
+                                Recursive: true,
+                                IncludeItemTypes: 'Episode',
+                                Limit: 1,
+                                Filters: 'IsUnplayed',
+                                SortBy: 'ParentIndexNumber,IndexNumber',
+                                Fields: 'SeriesThumbImageTag,ParentThumbImageTag,BackdropImageTags,ParentBackdropImageTags'
+                            });
+                        } else {
+                            // On Jellyfin, query next up directly using SeriesId parameter.
+                            nextUp = await api.getNextUp({ SeriesId: this._item.Id, Limit: 1 });
+                        }
+
                         if (nextUp && nextUp.Items && nextUp.Items.length > 0) {
                             itemToPlay = nextUp.Items[0];
                             // Auto-resume if it has progress
@@ -3258,11 +3998,12 @@ class DetailsPage extends Page {
 
         eventBus.emit('player:play', {
             item: itemToPlay,
-            resume,
+            resume: ghostMode ? false : resume,
             mediaSourceId: this._selectedMediaSourceId,
             audioStreamIndex: this._selectedAudioIndex,
             subtitleStreamIndex: this._selectedSubtitleIndex,
-            backdropUrl
+            backdropUrl,
+            ghostMode
         });
     }
 
@@ -3352,7 +4093,7 @@ class DetailsPage extends Page {
                 return `
                 <button class="modal-option-btn ${isSelected ? 'selected' : ''}" data-index="${track.Index}" tabindex="0">
                     <div class="check-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        ${detailsIcons.check}
                     </div>
                     <span class="track-option-label">
                         <span class="track-label-text">${label}</span>
@@ -3534,6 +4275,14 @@ class DetailsPage extends Page {
                 }
             }
 
+            // ── Add to Playlist / Collection ────────────────────────────────────
+            // Show for any media item that can be added to a group
+            const nonPlayableTypes = ['Person', 'CollectionFolder', 'UserView', 'Folder', 'Genre', 'Studio', 'Year'];
+            if (this._item?.Id && !nonPlayableTypes.includes(this._item.Type)) {
+                options.push({ id: 'add-to-playlist', label: i18n.t('AddToPlaylist') });
+                options.push({ id: 'add-to-collection', label: i18n.t('AddToCollection') || 'Add to Collection' });
+            }
+
             // ── Delete Media Permission Check ────────────────────────────────────
             // Only show delete option if the item explicitly reports CanDelete=true
             if (this._item.CanDelete) {
@@ -3541,15 +4290,22 @@ class DetailsPage extends Page {
             }
         }
 
-        const optionsHtml = options
-            .map((opt, i) => {
-                return `
+        const optionsHtml =
+            options.length === 0
+                ? `
+            <div class="modal-empty-placeholder" style="padding: 24px 16px; text-align: center; opacity: 0.7; font-size: 1.1rem; pointer-events: none;" data-i18n="NoOptionsAvailable">
+                ${i18n.t('NoOptionsAvailable') || 'No options available'}
+            </div>
+        `
+                : options
+                    .map((opt, i) => {
+                        return `
                 <button class="modal-option-btn ${opt.id === 'delete' ? 'danger-action' : ''}" data-id="${opt.id}" tabindex="0">
                     <span>${opt.label}</span>
                 </button>
             `;
-            })
-            .join('');
+                    })
+                    .join('');
 
         overlay.innerHTML = `
             <div class="settings-modal" role="dialog" aria-modal="true">
@@ -3595,7 +4351,15 @@ class DetailsPage extends Page {
         });
 
         // Set active immediately
-        focusManager.setActiveSection(optionsSection);
+        if (options.length === 0) {
+            focusManager.setActiveSection(actionsSection);
+            setTimeout(() => {
+                const cancelBtn = overlay.querySelector('#btn-modal-cancel');
+                if (cancelBtn) focusManager.focusElement(cancelBtn);
+            }, 50);
+        } else {
+            focusManager.setActiveSection(optionsSection);
+        }
 
         // Helper to close menu
         this._closeMoreMenu = () => {
@@ -3734,6 +4498,20 @@ class DetailsPage extends Page {
                         fromMoreOptions: true,
                         oldOnBack: oldOnBack
                     });
+                } else if (id === 'add-to-playlist' || id === 'add-to-collection') {
+                    this._isMoreMenuOpen = false;
+                    overlay.classList.remove('visible');
+                    focusManager.unregister('details-more-menu');
+                    focusManager.unregister('details-more-menu-actions');
+                    setTimeout(() => overlay.remove(), 300);
+
+                    const mode = id === 'add-to-collection' ? 'collection' : 'playlist';
+                    AddToTargetModal.show(this, itemId, mode, {
+                        prevFocus: this._prevFocus,
+                        prevSection: this._prevSection,
+                        fromMoreOptions: true,
+                        oldOnBack: oldOnBack
+                    });
                 } else if (id === 'delete') {
                     // Transition to confirmation dialog
                     this._showDeleteConfirmation(itemId);
@@ -3816,6 +4594,38 @@ class DetailsPage extends Page {
                     ReplaceAllMetadata: opt.replace,
                     ReplaceAllImages: opt.replace
                 });
+
+                // ── Purge ALL cached data so every page re-fetches fresh ───
+                // The ETag cache can return stale 304-cached bodies for the
+                // same URL — wiping it ensures the next request gets a 200.
+                api.clearEtagCache();
+
+                // Wipe all home and details page in-memory caches so the
+                // next visit to any page fetches fresh data from the server.
+                state.clearByPrefix('home:');
+                state.clearByPrefix('details:');
+
+                // Also clear the rendered-row cache used by the homepage
+                state.delete('home:pageCache');
+
+                // ── Re-fetch current page's episode data ─────────────────────
+                // The server may still be processing the scan, but clearing
+                // the cache and re-fetching gives the best chance of showing
+                // up-to-date content without requiring a page navigation.
+                if (this._item?.SeriesId && this._item?.SeasonId) {
+                    const cacheKey = `details:episodes:${this._item.SeriesId}:${this._item.SeasonId}`;
+                    state.delete(cacheKey);
+                    this._episodes = null;
+
+                    // Fire re-fetch after a short delay to let the server
+                    // begin processing before we re-render the sections.
+                    setTimeout(() => {
+                        if (!this._isMounted) return;
+                        this._loadEpisodes(this._item.SeriesId, this._itemId).catch(() => { });
+                        this._loadMoreFromSeason().catch(() => { });
+                    }, 500);
+                }
+
                 toast.show(i18n.t('MessageRefreshQueued'));
             } catch (e) {
                 log.error('Failed to queue metadata refresh', e);
@@ -4466,10 +5276,16 @@ class DetailsPage extends Page {
         try {
             if (isPlayed) {
                 await api.unmarkPlayed(this._itemId);
-                btn?.classList.remove('active');
+                if (btn) {
+                    btn.classList.remove('active');
+                    btn.innerHTML = detailsIcons.watchedOutline;
+                }
             } else {
                 await api.markPlayed(this._itemId);
-                btn?.classList.add('active');
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.innerHTML = detailsIcons.watchedFilled;
+                }
             }
 
             this._item.UserData = this._item.UserData || {};
@@ -4482,12 +5298,48 @@ class DetailsPage extends Page {
     }
 
     _updateCachedPlayedStatus() {
-        const cachedItem = Object.entries(state.getAll())
-            .filter(([key, cached]) => key.startsWith('library:state:') && cached?.stateData?.items)
-            .flatMap(([, cached]) => cached.stateData.items)
-            .find(({ Id }) => Id === this._itemId);
+        const itemId = this._itemId;
+        const userData = this._item.UserData;
 
-        if (cachedItem) cachedItem.UserData = { ...cachedItem.UserData, ...this._item.UserData };
+        // 1. Patch library:state:* caches (library page grid items)
+        const allState = state.getAll();
+        for (const [key, val] of Object.entries(allState)) {
+            if (key.startsWith('library:state:') && val?.stateData?.items) {
+                const match = val.stateData.items.find(({ Id }) => Id === itemId);
+                if (match) match.UserData = { ...match.UserData, ...userData };
+            }
+        }
+
+        // 2. Patch details:episodes:* caches (season episode lists)
+        for (const [key, episodes] of Object.entries(allState)) {
+            if (key.startsWith('details:episodes:') && Array.isArray(episodes)) {
+                const match = episodes.find((ep) => ep.Id === itemId);
+                if (match) match.UserData = { ...match.UserData, ...userData };
+            }
+        }
+
+        // 3. Delete home:pageCache — row structure depends on server-side filters
+        // (e.g. continue watching = PlaybackPositionTicks > 0), so patching individual
+        // item UserData isn't enough. Force a full refetch on next HomePage visit.
+        state.delete('home:pageCache');
+
+        // 4. Re-render the More from Season row if on an Episode page
+        if (this._item?.Type === 'Episode' && this._item.SeriesId && this._item.SeasonId) {
+            this._refreshMoreFromSeason();
+        }
+    }
+
+    _refreshMoreFromSeason() {
+        const list = this.$('#more-from-season-row');
+        const section = this.$('#more-from-season-section');
+        if (!list || !section) return;
+
+        // Clear old virtual row so _loadMoreFromSeason renders fresh
+        delete this._virtualRows?.['more-from-season-section'];
+
+        // Re-render with current (now-patched) cached data
+        list.innerHTML = '';
+        this._loadMoreFromSeason();
     }
 
     async _resetProgress() {
@@ -4533,10 +5385,6 @@ class DetailsPage extends Page {
 
         // --------------------------------------------------------------------
         // Stop background ambient theme score loop playback.
-        // Under Apple's HIG principles, when transitioning between distinct
-        // navigational spaces, the audio scape must cleanly fade or cease to
-        // make room for the new destination's sensory focus.
-        //
         // Elegant Sustain Logic: If the next destination is also a DetailsPage
         // (e.g. going from a Series details to a Season/Episode details, or back),
         // we defer stopping by a 2.0-second grace period. If the new page shares
@@ -4566,6 +5414,20 @@ class DetailsPage extends Page {
         if (this._isRichMetaActive) {
             this._deactivateRichMeta();
         }
+
+        if (this._playlistGrid) {
+            this._playlistGrid.destroy();
+            this._playlistGrid = null;
+        }
+        if (this._songsGrid) {
+            this._songsGrid.destroy();
+            this._songsGrid = null;
+        }
+        if (this._episodeGrid) {
+            this._episodeGrid.destroy();
+            this._episodeGrid = null;
+        }
+
         super.destroy();
     }
 }

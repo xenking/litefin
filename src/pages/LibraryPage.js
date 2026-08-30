@@ -10,13 +10,16 @@ import Page from './Page.js';
 import { api } from '../api/index.js';
 import { router } from '../core/Router.js';
 import { focusManager } from '../ui/FocusManager.js';
+import { scrollController } from '../ui/ScrollController.js';
 import CardRenderer from '../utils/CardRenderer.js';
+import { imageService } from '../utils/ImageService.js';
 import { VirtualCardRow } from '../components/VirtualCardRow.js';
 import { lazyLoader } from '../utils/LazyLoader.js';
 import { logger } from '../utils/Logger.js';
 import { i18n } from '../utils/i18n.js';
 import { state } from '../core/StateManager.js';
 import { storage } from '../utils/StorageService.js';
+import { eventBus } from '../core/EventBus.js';
 
 const log = logger.create('Library');
 
@@ -43,6 +46,26 @@ class LibraryPage extends Page {
 
             // Data Cache
             items: [],
+
+            /*
+             * ---------------------------------------------------------------
+             * VIRTUAL GRID WINDOW STATE
+             * ---------------------------------------------------------------
+             * Instead of rendering all N items at once, we maintain a sliding
+             * "window" of DOM nodes. Only items[gridWindowStart..gridWindowEnd-1]
+             * exist in the DOM at any time. A spacer <div> at the top of the
+             * grid holds the height of the removed top rows so scroll position
+             * is not disturbed when items are evicted.
+             *
+             *   gridWindowStart  — first item index currently in DOM
+             *   gridWindowEnd    — one past the last item index currently in DOM
+             *   gridCardRowHeight — measured height of one card row (px), cached
+             * ---------------------------------------------------------------
+             */
+            gridWindowStart: 0,
+            gridWindowEnd: 0,
+            gridCardRowHeight: null,
+
             alphaPickerChars: '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
 
             /*
@@ -60,7 +83,9 @@ class LibraryPage extends Page {
              * Music libraries default to 'square' (album-cover style), which maps to
              * CardRenderer type 'square' rather than adding a 6th viewMode constant.
              */
-            viewMode: 'poster'
+            viewMode: 'poster',
+            gridMode: 'dynamic',
+            gridColumns: 5
         };
 
         // Bindings
@@ -223,6 +248,30 @@ class LibraryPage extends Page {
         `;
     }
 
+    /*
+     * =========================================================================
+     * GRID COLUMNS DEFAULT CONFIGURATION
+     * =========================================================================
+     * Retrieves the default static column counts based on the active view mode
+     * for standard TV displays.
+     * =========================================================================
+     */
+    _getDefaultColumnsForMode(mode) {
+        switch (mode) {
+            case 'small-poster':
+                return 9;
+            case 'thumb':
+                return 4;
+            case 'banner':
+                return 3;
+            case 'list':
+                return 1;
+            case 'poster':
+            default:
+                return 5;
+        }
+    }
+
     // ========================================================================
     // Lifecycle
     // ========================================================================
@@ -244,6 +293,38 @@ class LibraryPage extends Page {
                 virtualTitle = decodeURIComponent(this.params.personName);
             } else if (this.params.searchTerm) {
                 virtualTitle = `${i18n.t('Search')}: ${decodeURIComponent(this.params.searchTerm)}`;
+            } else if (this.params.IsFavorite === 'true') {
+                // =============================================================
+                // TRANSLATABLE TYPE-SPECIFIC FAVORITE HEADERS
+                // =============================================================
+                // Maps the includeItemTypes query filter parameters to localized
+                // singular or plural display values (e.g. Movies, TV Shows, etc.).
+                // =============================================================
+                let typeLabel = '';
+                if (this.params.includeItemTypes) {
+                    if (this.params.includeItemTypes.includes('Movie')) {
+                        typeLabel = i18n.t('Movies') || 'Movies';
+                    } else if (this.params.includeItemTypes.includes('Series')) {
+                        typeLabel = i18n.t('TypeOptionPluralSeries') || 'TV Shows';
+                    } else if (this.params.includeItemTypes.includes('Season')) {
+                        typeLabel = i18n.t('HeaderSeasons') || 'Seasons';
+                    } else if (this.params.includeItemTypes.includes('Episode')) {
+                        typeLabel = i18n.t('Episodes') || 'Episodes';
+                    } else if (this.params.includeItemTypes.includes('TvChannel')) {
+                        typeLabel = i18n.t('LiveTv') || 'Live TV';
+                    } else if (this.params.includeItemTypes.includes('Person')) {
+                        typeLabel = i18n.t('People') || 'People';
+                    } else if (this.params.includeItemTypes.includes('MusicArtist')) {
+                        typeLabel = i18n.t('Artists') || 'Artists';
+                    } else if (this.params.includeItemTypes.includes('MusicAlbum')) {
+                        typeLabel = i18n.t('Albums') || 'Albums';
+                    } else if (this.params.includeItemTypes.includes('Audio')) {
+                        typeLabel = i18n.t('Songs') || 'Songs';
+                    }
+                }
+
+                // Format title as e.g. "Favorites - Movies" or just fallback to "Favorites"
+                virtualTitle = `${i18n.t('Favorites') || 'Favorites'}${typeLabel ? ' - ' + typeLabel : ''}`;
             }
 
             this.state.libraryInfo = {
@@ -261,6 +342,7 @@ class LibraryPage extends Page {
 
         // State Rehydration Check
         const savedState = state.get(cacheKey);
+
         if (savedState) {
             // Merge cached state properties
             Object.assign(this.state, savedState.stateData);
@@ -274,6 +356,18 @@ class LibraryPage extends Page {
             this._loadPersistedSortMode();
             this._loadPersistedFilters();
 
+            // =========================================================================
+            // QUERY PARAMETER FILTER OVERRIDES (CACHE)
+            // =========================================================================
+            // If the route contains an explicit 'IsFavorite=true' query parameter,
+            // we override the loaded library filters to enforce favorite filtering.
+            // This allows linking directly to a favorite-filtered subset of any library.
+            // =========================================================================
+            if (this.params.IsFavorite === 'true') {
+                this.state.filters = this.state.filters || {};
+                this.state.filters.IsFavorite = true;
+            }
+
             // 1. Setup UI Components
             this._renderTabs();
             this._renderAlphaPicker();
@@ -282,7 +376,19 @@ class LibraryPage extends Page {
             i18n.translateDOM(this.el);
             this._bindEvents();
 
-            this.$('#library-title').textContent = this.state.libraryInfo?.Name || this.title;
+            // =========================================================================
+            // FAVORITES TITLE DECORATION (CACHE)
+            // =========================================================================
+            // If we are displaying favorite-filtered items, prepend "Favorites"
+            // to the page title to provide clear contextual feedback.
+            // =========================================================================
+            let title = this.state.libraryInfo?.Name || this.title;
+            if (this.params.IsFavorite === 'true') {
+                title = `${i18n.t('Favorites') || 'Favorites'} - ${title}`;
+            }
+
+            this.$('#library-title').textContent = title;
+            this.title = title;
 
             // 2. Hide loading skeleton, show correct container
             const isHorizontalLayout =
@@ -310,12 +416,34 @@ class LibraryPage extends Page {
             // 3. Restore Focus
             requestAnimationFrame(() => {
                 let restoredFocus = false;
-                const targetId = savedState.focusItemId;
-                const sectionId = savedState.focusSectionId;
+                const targetId = storage.getItem('pref:disableFocusRestore') === 'true' ? null : savedState.focusItemId;
+                const sectionId =
+                    storage.getItem('pref:disableFocusRestore') === 'true' ? null : savedState.focusSectionId;
 
                 if (targetId && sectionId) {
                     const sectionConfig = focusManager.getSectionConfig(sectionId);
                     const sectionContainer = sectionConfig ? sectionConfig.container : this.el;
+
+                    // If the saved focus item is beyond the first rendered chunk,
+                    // expand the rendered window so the card element exists in the
+                    // DOM and can be found by querySelector. Without this, focus
+                    // restoration silently fails for items past the initial chunk.
+                    const grid = this.$('#library-grid');
+                    if (grid && this.state.items && this.state._gridColumns) {
+                        const itemIndex = this.state.items.findIndex((item) => item.Id === targetId);
+                        if (itemIndex >= 0) {
+                            const columns = this.state._gridColumns;
+                            while (
+                                itemIndex >= this.state.gridWindowEnd &&
+                                this.state.gridWindowEnd < this.state.items.length
+                            ) {
+                                this._appendGridChunk(grid, this.state.items, columns);
+                            }
+                            while (itemIndex < this.state.gridWindowStart && this.state.gridWindowStart > 0) {
+                                this._prependGridChunk(grid, this.state.items, columns);
+                            }
+                        }
+                    }
 
                     const savedElement = sectionContainer.querySelector(
                         `[data-item-id="${targetId}"], [data-id="${targetId}"], [id="${targetId}"]`
@@ -339,18 +467,25 @@ class LibraryPage extends Page {
             return;
         }
 
-        // 1. Fetch Library Info — skip for virtual libraries ('all') as they have no real item record.
-        // Virtual library info was already set up in the isVirtualLibrary block above.
-        if (!isVirtualLibrary) {
-            await this._fetchLibraryInfo();
-        }
-
+        // Library info was already fetched at the top (shared with cache-hit path).
         // Load persisted view mode, sort configurations, and filters now that we know
         // the libraryId and collectionType. This happens before _renderGrid() so the correct
         // display modes and subsets are active from the very beginning.
         this._loadPersistedViewMode();
         this._loadPersistedSortMode();
         this._loadPersistedFilters();
+
+        // =========================================================================
+        // QUERY PARAMETER FILTER OVERRIDES (FRESH)
+        // =========================================================================
+        // If the route contains an explicit 'IsFavorite=true' query parameter,
+        // we override the loaded library filters to enforce favorite filtering.
+        // This allows linking directly to a favorite-filtered subset of any library.
+        // =========================================================================
+        if (this.params.IsFavorite === 'true') {
+            this.state.filters = this.state.filters || {};
+            this.state.filters.IsFavorite = true;
+        }
 
         // 2. Setup UI Components
         this._renderTabs();
@@ -461,6 +596,14 @@ class LibraryPage extends Page {
     }
 
     _setupFocus() {
+        // Clear stale focus memory from previously viewed libraries since all
+        // library instances share section names like 'library-grid'
+        focusManager.clearMemory('library-grid');
+        focusManager.clearMemory('row-0');
+        focusManager.clearMemory('library-tabs');
+        focusManager.clearMemory('library-controls');
+        focusManager.clearMemory('empty-state-btn');
+
         const collectionType = this.state.libraryInfo?.CollectionType;
         const autoFocusFirstItem = storage.getItem('pref:focusFirstItemLibrary') !== 'false';
 
@@ -599,10 +742,11 @@ class LibraryPage extends Page {
     }
 
     _saveState(focusSectionId, focusItemId) {
+        if (storage.getItem('pref:disableLibraryCache') === 'true') return;
         state.set(this._getCacheKey(), {
             stateData: this.state,
-            focusSectionId,
-            focusItemId
+            focusSectionId: storage.getItem('pref:disableFocusRestore') === 'true' ? null : focusSectionId,
+            focusItemId: storage.getItem('pref:disableFocusRestore') === 'true' ? null : focusItemId
         });
     }
 
@@ -655,6 +799,24 @@ class LibraryPage extends Page {
         super.destroy();
         this.$('#library-tabs')?.removeEventListener('click', this._onTabClick);
         this.$('#alpha-picker')?.removeEventListener('click', this._onAlphaClick);
+
+        // Clean up the merged grid evaluation listeners
+        if (this._onGridFocusChanged) {
+            eventBus.off('focus:changed', this._onGridFocusChanged);
+            this._onGridFocusChanged = null;
+        }
+        if (this._onGridScroll) {
+            const scrollContainer = this.$('#library-scroll-container') || this.el?.querySelector('.page-content');
+            scrollContainer?.removeEventListener('scroll', this._onGridScroll);
+            this._onGridScroll = null;
+        }
+        if (this._gridEvalFrameId) {
+            cancelAnimationFrame(this._gridEvalFrameId);
+            this._gridEvalFrameId = null;
+        }
+        this._gridEvalPending = false;
+        this._gridFocusElement = null;
+        this._gridScrollTop = null;
     }
 
     // ========================================================================
@@ -696,8 +858,20 @@ class LibraryPage extends Page {
                 item.Type === 'Folder' || (item.Type === 'CollectionFolder' && !item.CollectionType && item.ParentId);
 
             this.state.libraryInfo = item;
-            this.$('#library-title').textContent = item.Name;
-            this.title = item.Name; // Update Page title
+            let title = item.Name;
+
+            // =========================================================================
+            // FAVORITES TITLE DECORATION (FETCH)
+            // =========================================================================
+            // If the route contains an explicit 'IsFavorite=true' query parameter,
+            // we prepend the localized 'Favorites' string to the library page title.
+            // =========================================================================
+            if (this.params.IsFavorite === 'true') {
+                title = `${i18n.t('Favorites') || 'Favorites'} - ${title}`;
+            }
+
+            this.$('#library-title').textContent = title;
+            this.title = title; // Update Page title
         } catch (e) {
             log.error('Failed to fetch info', e);
         }
@@ -768,6 +942,13 @@ class LibraryPage extends Page {
             grid.innerHTML = CardRenderer.createSkeletonHtml(12, isLandscape, skeletonMode, shouldHideLabels);
         }
 
+        // Align limit to grid columns so the last rendered row is always full.
+        // Avoids visual partial-row gaps when navigating the grid via D-pad.
+        const alignCols = this.state.gridMode === 'dynamic' ? this.state.gridColumns : 0;
+        if (alignCols > 0) {
+            this.state.limit = Math.ceil(this.state.limit / alignCols) * alignCols;
+        }
+
         try {
             const params = {
                 SortBy: this.state.sortBy,
@@ -775,7 +956,7 @@ class LibraryPage extends Page {
                 StartIndex: this.state.startIndex,
                 Limit: this.state.limit,
                 Recursive: true,
-                Fields: 'PrimaryImageAspectRatio,BasicSyncInfo,DateCreated,ProductionYear,CommunityRating,OfficialRating',
+                Fields: 'DateCreated,ProductionYear,CommunityRating,OfficialRating,MediaSourceCount',
                 ImageTypeLimit: 1,
                 EnableImageTypes: 'Primary,Backdrop,Thumb'
             };
@@ -1269,7 +1450,7 @@ class LibraryPage extends Page {
                         Limit: 12, // Max 12 items as requested
                         Recursive: true,
                         IncludeItemTypes: includeItemTypes,
-                        Fields: 'PrimaryImageAspectRatio,ProductionYear,CommunityRating',
+                        Fields: 'ProductionYear,CommunityRating',
                         ImageTypeLimit: 1,
                         EnableImageTypes: 'Primary,Backdrop,Thumb'
                     };
@@ -1435,6 +1616,12 @@ class LibraryPage extends Page {
                 this.state.items = result?.Items || [];
                 this.state.totalRecordCount = result?.TotalRecordCount || 0;
 
+                // Enrich individual playlist/collection items with Primary images from their contents
+                const collectionType = this.state.libraryInfo?.CollectionType;
+                if ((collectionType === 'playlists' || collectionType === 'boxsets') && this.state.items.length > 0) {
+                    await this._enrichCollectionItems(this.state.items, collectionType);
+                }
+
                 this._renderGrid(this.state.items);
                 this._updatePaginationUI();
             } else {
@@ -1565,6 +1752,22 @@ class LibraryPage extends Page {
         }
 
         log.info(`[ViewMode] Loaded view mode: ${this.state.viewMode} for library ${this.state.libraryId}`);
+
+        /*
+         * =========================================================================
+         * REHYDRATE GRID CONFIGURATIONS
+         * =========================================================================
+         * Loads whether we are using Static or Dynamic sizing modes, and the specific
+         * custom column counts selected for this viewMode.
+         * =========================================================================
+         */
+        const modeKey = `pref:library:gridMode:${this.state.libraryId}`;
+        const savedMode = storage.getItem(modeKey);
+        this.state.gridMode = savedMode === 'static' ? 'static' : 'dynamic';
+
+        const colsKey = `pref:library:gridColumns:${this.state.libraryId}:${this.state.viewMode}`;
+        const savedCols = parseInt(storage.getItem(colsKey), 10);
+        this.state.gridColumns = !isNaN(savedCols) ? savedCols : this._getDefaultColumnsForMode(this.state.viewMode);
     }
 
     _loadPersistedSortMode() {
@@ -1593,7 +1796,6 @@ class LibraryPage extends Page {
      * Load the user's previously applied filters for this specific library.
      * Preserving filter preferences ensures a personalized and streamlined
      * navigation experience across sessions, conforming to state-preservation
-     * recommendations from Apple's Human Interface Guidelines.
      */
     _loadPersistedFilters() {
         // Skip sub-views (genre, studio, tag pages, etc.) to prevent overriding
@@ -1647,9 +1849,13 @@ class LibraryPage extends Page {
         // Custom layout requests from deep links (Music, TV Channels, Artists, People)
         const squareTypes = ['TvChannel', 'MusicAlbum', 'MusicArtist,Artist', 'MusicArtist', 'Audio'];
         if (
-            this.state.libraryInfo?.CollectionType === 'music' ||
-            this.state.libraryInfo?.CollectionType === 'homevideos' ||
             this.state.libraryInfo?.CollectionType === 'musicvideos' ||
+            this.state.libraryInfo?.CollectionType === 'homevideos'
+        ) {
+            return 'backdrop';
+        }
+        if (
+            this.state.libraryInfo?.CollectionType === 'music' ||
             (this.params.includeItemTypes && squareTypes.includes(this.params.includeItemTypes))
         ) {
             // For thumb/banner, use backdrop if available; fall back gracefully
@@ -1832,9 +2038,58 @@ class LibraryPage extends Page {
         });
     }
 
+    async _enrichCollectionItems(items, collectionType) {
+        const isPlaylist = collectionType === 'playlists';
+        await Promise.all(
+            items.map(async (item) => {
+                try {
+                    let innerItems;
+                    if (isPlaylist) {
+                        const resp = await api.getPlaylistItems(item.Id, {
+                            Limit: 20,
+                            Fields: 'ImageTags'
+                        });
+                        innerItems = resp?.Items || [];
+                    } else {
+                        const resp = await api.getItems({
+                            ParentId: item.Id,
+                            SortBy: 'Random',
+                            Recursive: true,
+                            Limit: 20,
+                            Fields: 'ImageTags',
+                            ImageTypeLimit: 1,
+                            EnableImageTypes: 'Primary'
+                        });
+                        innerItems = resp?.Items || [];
+                    }
+
+                    const shuffled = innerItems.sort(() => 0.5 - Math.random());
+                    const { maxWidth, quality } = imageService.getParams('card-backdrop');
+
+                    for (const inner of shuffled) {
+                        if (inner.ImageTags?.Primary) {
+                            item._dynamicThumbUrl = api.getImageUrl(inner.Id, 'Primary', {
+                                maxWidth,
+                                quality,
+                                tag: inner.ImageTags.Primary
+                            });
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    log.warn(`Failed to fetch dynamic thumb for ${item.Name}`, e);
+                }
+            })
+        );
+    }
+
     _renderGrid(items) {
         const grid = this.$('#library-grid');
         if (!grid) return;
+
+        // Invalidate the CardRenderer HTML cache — items or view options may
+        // have changed since the last render (new data, view mode switch, etc.)
+        CardRenderer.clearCache();
 
         // Cleanup: Hide horizontal rows if they exist and restore grid
         const rowsContainer = this.$('#library-rows');
@@ -1846,12 +2101,14 @@ class LibraryPage extends Page {
         const pagination = this.$('#library-pagination');
         if (pagination) pagination.style.display = ''; // Restore pagination
 
-        // Use landscape cards via CSS class if needed (e.g. for Episodes, Upcoming, Networks)
-        // These viewTypes always force landscape regardless of user view mode preference.
+        // Use landscape cards via CSS class if needed (e.g. for Episodes, Upcoming, Networks, Music Videos, or Home Videos)
+        // These viewTypes/collections always force landscape regardless of user view mode preference.
         const isLandscape =
             this.state.viewType === 'Episodes' ||
             this.state.viewType === 'Upcoming' ||
-            this.state.viewType === 'Networks';
+            this.state.viewType === 'Networks' ||
+            this.state.libraryInfo?.CollectionType === 'musicvideos' ||
+            this.state.libraryInfo?.CollectionType === 'homevideos';
 
         // --------------------------------------------------------------------
         // Apply the view mode CSS modifier class to the grid container.
@@ -1876,6 +2133,30 @@ class LibraryPage extends Page {
                 grid.classList.add(`view-${this.state.viewMode}`);
             }
             // Any unknown mode (e.g. stale 'square' from old storage) falls through to poster
+        }
+
+        /*
+         * =========================================================================
+         * DYNAMIC LAYOUT ENGINE RESOLUTION
+         * =========================================================================
+         * When Dynamic columns mode is enabled (and we are not in single-column List
+         * view), we dynamically inject the CSS variables onto the grid node and
+         * calculate the exact pixel width of each card.
+         * =========================================================================
+         */
+        let cardWidth = null;
+        if (this.state.gridMode === 'dynamic' && this.state.viewMode !== 'list') {
+            grid.classList.add('mode-dynamic');
+            grid.style.setProperty('--grid-columns', this.state.gridColumns);
+
+            // Compute card width minus margins to feed ImageService parameters
+            const containerWidth = grid.clientWidth || 1720;
+            const columns = this.state.gridColumns || 5;
+            const margin = 20; // Must align with --grid-card-margin in library.css
+            cardWidth = Math.round((containerWidth - (columns - 1) * margin) / columns);
+        } else {
+            grid.classList.remove('mode-dynamic');
+            grid.style.removeProperty('--grid-columns');
         }
 
         if (!items || items.length === 0) {
@@ -2007,36 +2288,59 @@ class LibraryPage extends Page {
         // Special viewTypes (Episodes, Networks) always override the user preference.
         const resolvedCardType = this._resolveCardType(isLandscape);
 
-        // Generate HTML using the correct card type and view mode flag
-        const html = items
-            .map((item) =>
-                // ==========================================================
-                // Grid Card Rendering Configuration
-                // ==========================================================
-                // Here we set 'isGrid: true' to tell the card renderer that
-                // this card is rendered inside the vertical library grid.
-                // This disables horizontal poster expansions to maintain
-                // clean, stable column layouts and prevent shifts on TV displays.
-                // ==========================================================
-                CardRenderer.createCardHtml(item, {
-                    isLandscape: isLandscape || this.state.viewMode === 'thumb' || this.state.viewMode === 'banner',
-                    type: this.state.viewMode === 'banner' ? 'banner' : resolvedCardType,
-                    contextType:
-                        this.state.viewType === 'Upcoming'
-                            ? 'upcoming'
-                            : this.state.viewType === 'Albums'
-                              ? 'music'
-                              : 'library',
-                    // Only show rich meta row in list view (rating, score, runtime)
-                    showMeta: !isLandscape && this.state.viewMode === 'list',
-                    isGrid: true
-                })
-            )
-            .join('');
+        // ====================================================================
+        // PROGRESSIVE DOM INSERTION
+        // ====================================================================
+        // PROBLEM: Rendering all 100 items at once puts 100 flex nodes into the
+        // layout engine simultaneously. Even with lazy IMAGE loading, every
+        // D-pad keypress forces a flexbox layout pass, style recalculation, and
+        // compositor evaluation over all 100 nodes — this is what makes 100-item
+        // libraries noticeably laggier than 25-item ones.
+        //
+        // SOLUTION: Render only the first visible chunk immediately, then append
+        // more rows as the user navigates toward the bottom. The DOM stays at
+        // ~25-35 items at any given time regardless of total library size.
+        //
+        // Chunk sizing: (columns × 5 rows) gives ~2 visible screens worth of content.
+        // ====================================================================
+        const columns =
+            this.state.gridColumns || this._getDefaultColumnsForMode(isLandscape ? 'thumb' : this.state.viewMode);
 
-        grid.innerHTML = html;
+        // Store rendering context + column count on state so _appendGridChunk
+        // and _prependGridChunk can access them without re-deriving
+        this.state._gridRenderContext = {
+            isLandscape,
+            resolvedCardType,
+            cardWidth
+        };
+        this.state._gridColumns = columns;
+        grid.dataset.gridColumns = columns;
 
-        // Lazy Load Images
+        // Reset the sliding window — a fresh _renderGrid always starts from zero
+        this.state.gridWindowStart = 0;
+        this.state.gridWindowEnd = 0;
+        this.state.gridCardRowHeight = null; // Force re-measure on next append
+
+        // Reset direction cursors so stale positions from a previous page render
+        // don't immediately fire spurious append/prepend on the fresh grid
+        this._lastFocusItemIndex = 0;
+        this._lastGridScrollTop = 0;
+
+        // Clear the grid and inject the spacer that maintains scroll position
+        // when top rows are evicted from the DOM. Height starts at 0px.
+        grid.innerHTML = '<div id="grid-top-spacer" style="height:0;width:100%;flex:0 0 100%"></div>';
+
+        // Render the first chunk immediately — this is what the user sees on load
+        this._appendGridChunk(grid, items, columns);
+
+        // Eagerly measure row height while layout is already being computed
+        // from the initial render. This caches gridCardRowHeight before any
+        // user interaction, so _syncGridWindow and _prependGridChunk never
+        // need to force a synchronous layout reflow by reading offsetTop
+        // during a focus change or scroll event on the hot path.
+        this._measureGridRowHeight(grid, columns);
+
+        // Lazy Load Images (observe the initial chunk)
         lazyLoader.observe(grid);
 
         // Calculate expected alpha visibility (avoids DOM race conditions with _updateHeaderVisibility)
@@ -2065,14 +2369,107 @@ class LibraryPage extends Page {
         }
 
         // Re-register focus for grid items
+        const currentColumns =
+            this.state.gridMode === 'dynamic' && this.state.viewMode !== 'list'
+                ? this.state.gridColumns
+                : this._getDefaultColumnsForMode(isLandscape ? 'thumb' : this.state.viewMode);
+
         focusManager.register('library-grid', grid, {
             orientation: 'grid',
+            columns: currentColumns,
             leaveUp: isAlphaVisible ? 'alpha-picker' : 'library-controls',
             leaveDown: 'library-pagination',
             leaveLeft: 'sidebar',
             selector: '.media-card',
-            scrollOffsetTop: 100
+            scrollOffsetTop: 100,
+
+            // =================================================================
+            // VIRTUAL GRID EDGE GUARD
+            // =================================================================
+            // When the user presses UP on the first rendered DOM row, FocusManager
+            // would normally fire leaveUp because no card exists above in the DOM.
+            // But if gridWindowStart > 0 there ARE real items above — they were
+            // just evicted from the DOM to keep the node count small.
+            //
+            // We intercept the UP move here (before FocusManager acts on it),
+            // prepend the missing rows back into the DOM, and return false.
+            // FocusManager then re-queries the grid (cache was invalidated by
+            // _hookGridCards) and finds the card directly above — allowing it
+            // to move focus there naturally, just as if the rows had always been
+            // in the DOM. The result: no accidental focus jumps to tabs/controls
+            // while holding UP through a windowed grid.
+            // =================================================================
+            onMove: (direction, focusedElement) => {
+                if (direction !== 'up') return false;
+                if (this.state.gridWindowStart <= 0) return false;
+                if (!focusedElement) return false;
+
+                // Are we on the FIRST rendered row?
+                const allCards = grid.querySelectorAll('.media-card');
+                let domIndex = -1;
+                for (let i = 0; i < allCards.length; i++) {
+                    if (allCards[i] === focusedElement) {
+                        domIndex = i;
+                        break;
+                    }
+                }
+                // domIndex < currentColumns means the card is in the first row
+                if (domIndex < 0 || domIndex >= currentColumns) return false;
+
+                // Prepend the evicted rows synchronously. _hookGridCards inside
+                // _prependGridChunk calls focusManager.invalidateCache() so
+                // FocusManager will re-query after we return false.
+                this._prependGridChunk(grid, this.state.items, currentColumns);
+
+                // Return false — FocusManager proceeds with its UP move,
+                // re-queries the grid, and lands on the card above correctly.
+                return false;
+            }
         });
+
+        // ====================================================================
+        // MERGED PROGRESSIVE DOM TRIGGER — shared evaluation engine
+        // ====================================================================
+        // Combines the two former evaluation paths (focus:changed for D-pad,
+        // native scroll for mouse/magic remote) into a SINGLE rAF-backed
+        // evaluation point. Both paths write their latest input to shared
+        // state and call _scheduleGridEval(), which guarantees at most one
+        // evaluation per frame regardless of how many input events fire.
+        //
+        // This eliminates:
+        //   1. Double append/prepend when both scroll and focus fire in
+        //      the same frame (e.g. scroll ends → focus settles on a card)
+        //   2. Duplicate _syncGridWindow calls operating on stale DOM
+        //   3. Separate rAF IDs competing for the same work
+        // ====================================================================
+        this._gridEvalPending = false;
+        this._gridEvalFrameId = null;
+        this._gridFocusElement = null;
+        this._gridScrollTop = null;
+
+        if (this._onGridFocusChanged) {
+            eventBus.off('focus:changed', this._onGridFocusChanged);
+        }
+        this._onGridFocusChanged = (element) => {
+            if (!element || !grid.contains(element)) return;
+            if (!element.classList.contains('media-card')) return;
+            this._gridFocusElement = element;
+            this._scheduleGridEval();
+        };
+        eventBus.on('focus:changed', this._onGridFocusChanged);
+
+        const scrollContainer = this.$('#library-scroll-container') || this.el.querySelector('.page-content');
+        if (scrollContainer) {
+            if (this._onGridScroll) {
+                scrollContainer.removeEventListener('scroll', this._onGridScroll);
+            }
+            this._lastGridScrollTop = 0;
+            this._onGridScroll = () => {
+                this._gridScrollTop = scrollContainer.scrollTop;
+                this._scheduleGridEval();
+            };
+            scrollContainer.addEventListener('scroll', this._onGridScroll, { passive: true });
+        }
 
         // Register pagination footer — the grid's leaveDown points here.
         // Without this registration the section is a ghost and focus is silently
@@ -2108,6 +2505,497 @@ class LibraryPage extends Page {
             });
         }
     }
+
+    /**
+     * =========================================================================
+     * GRID CARD HTML GENERATOR (shared by append and prepend)
+     * =========================================================================
+     * Produces the HTML string for a slice of items[], using the render context
+     * stored by _renderGrid so we don't re-derive card type / width / orientation.
+     * @param {Array} items - Subset of the full items array to render
+     * @returns {string} HTML string
+     * =========================================================================
+     */
+    _buildGridChunkHtml(items) {
+        const ctx = this.state._gridRenderContext || {};
+        const isLandscape = ctx.isLandscape || false;
+        const resolvedCardType = ctx.resolvedCardType || 'poster';
+        const cardWidth = ctx.cardWidth || null;
+
+        return items
+            .map((item) =>
+                CardRenderer.createCardHtml(item, {
+                    isLandscape: isLandscape || this.state.viewMode === 'thumb' || this.state.viewMode === 'banner',
+                    type: this.state.viewMode === 'banner' ? 'banner' : resolvedCardType,
+                    contextType:
+                        this.state.viewType === 'Upcoming'
+                            ? 'upcoming'
+                            : this.state.viewType === 'Albums'
+                              ? 'music'
+                              : 'library',
+                    showMeta: !isLandscape && this.state.viewMode === 'list',
+                    isGrid: true,
+                    cardWidth: cardWidth
+                })
+            )
+            .join('');
+    }
+
+    /**
+     * =========================================================================
+     * MEASURE GRID ROW HEIGHT (cached)
+     * =========================================================================
+     * Reads the vertical distance between the first and second card row by
+     * comparing offsetTop values. Includes any CSS gap/margin automatically.
+     * Result is cached in state.gridCardRowHeight so we only force layout once.
+     * @param {HTMLElement} grid
+     * @param {number} columns
+     * @returns {number|null} Row height in px, or null if not yet measurable
+     * =========================================================================
+     */
+    _measureGridRowHeight(grid, columns) {
+        if (this.state.gridCardRowHeight) return this.state.gridCardRowHeight;
+
+        const cards = grid.querySelectorAll('.media-card');
+        // Need at least 2 full rows to calculate the difference
+        if (cards.length < columns + 1) return null;
+
+        // Row height = offsetTop delta between row 0 card 0 and row 1 card 0.
+        // This naturally captures the card height + any CSS gap between rows.
+        const rowHeight = cards[columns].offsetTop - cards[0].offsetTop;
+        if (rowHeight > 0) {
+            this.state.gridCardRowHeight = rowHeight;
+        }
+        return rowHeight || null;
+    }
+
+    /**
+     * =========================================================================
+     * HOOK NEW CARDS INTO LAZY LOADERS + FOCUS CACHE
+     * =========================================================================
+     * After inserting DOM nodes, register their images with the lazy image
+     * observer and their shimmer wrappers with the shimmer pause observer.
+     * Then invalidate the FocusManager cache so new cards become navigable.
+     * @param {HTMLElement[]} newCards - Array of newly-inserted .media-card elements
+     * =========================================================================
+     */
+    _hookGridCards(newCards) {
+        if (!newCards || !newCards.length) return;
+
+        newCards.forEach((card) => {
+            const img = card.querySelector('img[data-src]');
+            if (img) {
+                lazyLoader.observeElement(img);
+            }
+            const shimmer = card.querySelector('.card-image.skeleton-shimmer');
+            if (shimmer && lazyLoader._shimmerObserver) {
+                lazyLoader._shimmerObserver.observe(shimmer);
+            }
+        });
+
+        // Tell FocusManager about the new focusable nodes
+        focusManager.invalidateCache('library-grid');
+
+        // Prewarm ScrollController offset cache in the next idle frame
+        requestAnimationFrame(() => {
+            const pageContent = document.querySelector('.page-content');
+            if (pageContent) {
+                scrollController.prewarmOffsetCache(newCards, pageContent);
+            }
+        });
+    }
+
+    /**
+     * =========================================================================
+     * PROGRESSIVE GRID CHUNK APPENDER — with sliding window eviction
+     * =========================================================================
+     * Appends the next batch of cards at the BOTTOM of the rendered window.
+     *
+     * Window cap: when the DOM count exceeds MAX_WINDOW_ROWS, the oldest rows
+     * at the top are removed and the top spacer div is grown by the same
+     * pixel amount. Since the spacer occupies the same space in the flex layout
+     * as the evicted cards, the scroll position stays perfectly stable.
+     *
+     * @param {HTMLElement} grid    - The #library-grid container element
+     * @param {Array}       items   - Full items array
+     * @param {number}      columns - Grid column count
+     * @returns {boolean}           - true if more items remain after this chunk
+     * =========================================================================
+     */
+    _appendGridChunk(grid, items, columns) {
+        if (!grid || !items || !items.length) return false;
+
+        const windowEnd = this.state.gridWindowEnd;
+
+        // All items already rendered — nothing to do
+        if (windowEnd >= items.length) return false;
+
+        // -----------------------------------------------------------------------
+        // CHUNK SIZE
+        // -----------------------------------------------------------------------
+        // First render: 5 rows — fills ~1.5 TV screens immediately.
+        // Incremental: 3 rows — small enough not to spike layout, large enough
+        // that the user can scroll a full screen before triggering another append.
+        // -----------------------------------------------------------------------
+        const INITIAL_ROWS = 5;
+        const INCREMENTAL_ROWS = 3;
+        // Maximum rows to keep in the DOM at once (8 rows = comfortable window)
+        const MAX_WINDOW_ROWS = 8;
+
+        const isFirstChunk = windowEnd === 0;
+        const chunkSize = isFirstChunk ? columns * INITIAL_ROWS : columns * INCREMENTAL_ROWS;
+
+        const chunkItems = items.slice(windowEnd, windowEnd + chunkSize);
+        if (!chunkItems.length) return false;
+
+        // Generate and append HTML for this chunk
+        grid.insertAdjacentHTML('beforeend', this._buildGridChunkHtml(chunkItems));
+        this.state.gridWindowEnd = windowEnd + chunkItems.length;
+
+        // Hook new cards into observers and focus cache (skip for first chunk —
+        // _renderGrid calls lazyLoader.observe(grid) separately for that case)
+        if (!isFirstChunk) {
+            const allCards = grid.querySelectorAll('.media-card');
+            // The new cards are the last chunkItems.length entries
+            const newCards = Array.from(allCards).slice(allCards.length - chunkItems.length);
+            this._hookGridCards(newCards);
+        }
+
+        // Eviction is handled by _syncGridWindow (position-based, one row at a
+        // time, always off-screen) rather than here inside the append operation.
+        return this.state.gridWindowEnd < items.length;
+    }
+
+    /**
+     * =========================================================================
+     * PROGRESSIVE GRID CHUNK PREPENDER — for navigating back upward
+     * =========================================================================
+     * Adds rows at the TOP of the rendered window when the user navigates back
+     * toward cards that were previously evicted from the DOM.
+     *
+     * Inserts new cards AFTER the spacer div so they appear visually above the
+     * existing rendered cards. Shrinks the spacer by the same amount so scroll
+     * position stays stable. Evicts rows from the bottom if the window cap is
+     * exceeded.
+     *
+     * @param {HTMLElement} grid    - The #library-grid container element
+     * @param {Array}       items   - Full items array
+     * @param {number}      columns - Grid column count
+     * @returns {boolean}           - true if more items remain above this chunk
+     * =========================================================================
+     */
+    _prependGridChunk(grid, items, columns) {
+        if (!grid || !items || !items.length) return false;
+
+        const windowStart = this.state.gridWindowStart;
+
+        // Nothing above the current window — already at the very top
+        if (windowStart <= 0) return false;
+
+        const INCREMENTAL_ROWS = 3;
+        const MAX_WINDOW_ROWS = 8;
+
+        const chunkSize = Math.min(columns * INCREMENTAL_ROWS, windowStart);
+        const newStart = windowStart - chunkSize;
+
+        const chunkItems = items.slice(newStart, windowStart);
+        if (!chunkItems.length) return false;
+
+        // Measure row height BEFORE modifying the DOM (cards are still in place)
+        const rowHeight = this._measureGridRowHeight(grid, columns);
+
+        // Insert the new cards after the spacer, before the first existing card
+        const spacer = grid.querySelector('#grid-top-spacer');
+        if (spacer) {
+            spacer.insertAdjacentHTML('afterend', this._buildGridChunkHtml(chunkItems));
+        }
+
+        // Update window boundary
+        this.state.gridWindowStart = newStart;
+
+        // Shrink the spacer by exactly the height of the newly added rows.
+        // This keeps the cards below the insertion point at the same pixel
+        // offset from the top, so scrollTop doesn't need any adjustment.
+        if (rowHeight && spacer) {
+            const rowsAdded = Math.ceil(chunkSize / columns);
+            const currentSpacerHeight = parseInt(spacer.style.height, 10) || 0;
+            const newSpacerHeight = Math.max(0, currentSpacerHeight - rowsAdded * rowHeight);
+            spacer.style.height = `${newSpacerHeight}px`;
+        }
+
+        // Register the new cards with observers
+        const allCards = grid.querySelectorAll('.media-card');
+        const newCards = Array.from(allCards).slice(0, chunkSize);
+        this._hookGridCards(newCards);
+
+        // Eviction from the bottom is handled by _syncGridWindow — same
+        // position-based approach, symmetric to the top eviction.
+        return this.state.gridWindowStart > 0;
+    }
+
+    /**
+     * =========================================================================
+     * SCHEDULE GRID EVALUATION (shared by focus:changed + scroll)
+     * =========================================================================
+     * Single rAF-backed evaluation point that handles both D-pad navigation
+     * (via _gridFocusElement) and mouse/magic remote scrolling (via
+     * _gridScrollTop). Uses one pending flag + one rAF ID so at most one
+     * evaluation executes per frame, regardless of how many input events fire.
+     *
+     * Both focus:changed and scroll handlers delegate to this method, storing
+     * their latest input on shared state before scheduling. The downstream
+     * _evaluateGrid() reads the most current values from both sources.
+     * =========================================================================
+     */
+    _scheduleGridEval() {
+        if (this._gridEvalPending) return;
+        this._gridEvalPending = true;
+        this._gridEvalFrameId = requestAnimationFrame(() => {
+            this._gridEvalFrameId = null;
+            this._gridEvalPending = false;
+            this._evaluateGrid();
+        });
+    }
+
+    /**
+     * =========================================================================
+     * EVALUATE GRID BOUNDARIES (merged focus + scroll evaluation)
+     * =========================================================================
+     * Runs at most once per frame via _scheduleGridEval(). Evaluates grid
+     * append/prepend boundaries based on the user's current position.
+     *
+     * CRITICAL PRIORITY: If a scroll event is pending (_gridScrollTop is not
+     * null), the SCROLL-based evaluation runs. This is the correct priority
+     * for webOS magic-remote / mouse-wheel users who scroll WITHOUT changing
+     * focus: focus:changed never fires during their scrolling, so focus-based
+     * evaluation alone would never append rows and the grid would appear
+     * stuck at its initial chunk (the reported "only 5 rows" bug).
+     *
+     * When no scroll input is pending, focus-based evaluation (D-pad)
+     * determines the position instead.
+     * =========================================================================
+     */
+    _evaluateGrid() {
+        const grid = this.$('#library-grid');
+        if (!grid || !document.contains(grid)) return;
+
+        const currentColumns = this.state._gridColumns;
+        if (!currentColumns) return;
+
+        const scrollContainer = this.$('#library-scroll-container') || this.el?.querySelector('.page-content');
+        const focusedElement = this._gridFocusElement;
+
+        // ------------------------------------------------------------------
+        // PRIORITY 1: Scroll-based evaluation (pending scroll event)
+        // ------------------------------------------------------------------
+        // Runs whenever a scroll event is pending, regardless of focus state.
+        // This is essential for mouse-wheel / magic-remote scrolling where
+        // focus does not move and focus:changed never fires.
+        if (scrollContainer && this._gridScrollTop !== null) {
+            const scrollTop = this._gridScrollTop;
+            this._gridScrollTop = null; // Consume the scroll input
+
+            const containerHeight = scrollContainer.clientHeight;
+            const scrollHeight = scrollContainer.scrollHeight;
+            const rowHeight = this.state.gridCardRowHeight;
+
+            const scrollingDown = scrollTop > (this._lastGridScrollTop || 0);
+            this._lastGridScrollTop = scrollTop;
+
+            if (scrollingDown) {
+                const distanceFromBottom = scrollHeight - (scrollTop + containerHeight);
+                if (distanceFromBottom <= containerHeight * 1.5) {
+                    if (this.state.gridWindowEnd < this.state.items.length) {
+                        this._appendGridChunk(grid, this.state.items, currentColumns);
+                    }
+                }
+            } else {
+                const spacer = grid.querySelector('#grid-top-spacer');
+                const spacerHeight = spacer ? parseFloat(spacer.style.height || 0) : 0;
+                const distanceFromRenderedTop = scrollTop - spacerHeight;
+                if (this.state.gridWindowStart > 0 && distanceFromRenderedTop <= containerHeight * 1.5) {
+                    this._prependGridChunk(grid, this.state.items, currentColumns);
+                }
+            }
+
+            if (rowHeight) {
+                const spacer = grid.querySelector('#grid-top-spacer');
+                const spacerHeight = spacer ? parseFloat(spacer.style.height || 0) : 0;
+                const scrolledPastRenderedTop = Math.max(0, scrollTop - spacerHeight);
+
+                // ----------------------------------------------------------------
+                // OVERSHOOT GUARD — skip eviction when scrolled past the grid
+                // ----------------------------------------------------------------
+                // When the user presses DOWN from the last grid row, the page
+                // scrolls to reveal the pagination section below the grid.
+                // scrollTop now includes the pagination section's height, pushing
+                // the computed currentRow ABOVE the last real row. _syncGridWindow
+                // would then evict most of the visible grid to match a phantom row
+                // that doesn't exist, causing all UI elements to "disappear".
+                //
+                // We detect this by checking whether the visible grid content (from
+                // the rendered top + scroll offset within it) would exceed the last
+                // item in the array. If the derived row is higher than the last real
+                // row, we know scrollTop has strayed into the pagination/padding zone
+                // and skip _syncGridWindow entirely for this scroll event.
+                // ----------------------------------------------------------------
+                const maxRow = Math.max(0, Math.ceil(this.state.items.length / currentColumns) - 1);
+                const derivedRow =
+                    Math.floor(scrolledPastRenderedTop / rowHeight) +
+                    Math.floor(this.state.gridWindowStart / currentColumns);
+
+                // Only sync window if the derived row is within actual content bounds
+                if (derivedRow <= maxRow) {
+                    this._syncGridWindow(grid, this.state.items, currentColumns, derivedRow);
+                }
+            }
+
+            // Keep the focus-based direction cursor in sync so the next
+            // D-pad move compares against the current position rather than
+            // a stale value from before the scroll.
+            if (focusedElement && grid.contains(focusedElement)) {
+                const allCards = grid.querySelectorAll('.media-card');
+                for (let i = 0; i < allCards.length; i++) {
+                    if (allCards[i] === focusedElement) {
+                        this._lastFocusItemIndex = this.state.gridWindowStart + i;
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+
+        // ------------------------------------------------------------------
+        // PRIORITY 2: Focus-based evaluation (D-pad navigation)
+        // ------------------------------------------------------------------
+        if (focusedElement && grid.contains(focusedElement)) {
+            const allCards = grid.querySelectorAll('.media-card');
+            let domIndex = -1;
+            for (let i = 0; i < allCards.length; i++) {
+                if (allCards[i] === focusedElement) {
+                    domIndex = i;
+                    break;
+                }
+            }
+            if (domIndex >= 0) {
+                const itemIndex = this.state.gridWindowStart + domIndex;
+
+                // Direction isolation: only append when moving down,
+                // only prepend when moving up (prevents oscillation)
+                const movingDown = itemIndex > (this._lastFocusItemIndex || 0);
+                this._lastFocusItemIndex = itemIndex;
+
+                if (movingDown) {
+                    const appendThreshold = this.state.gridWindowEnd - currentColumns * 2;
+                    if (itemIndex >= appendThreshold && this.state.gridWindowEnd < this.state.items.length) {
+                        this._appendGridChunk(grid, this.state.items, currentColumns);
+                    }
+                } else {
+                    const prependThreshold = this.state.gridWindowStart + currentColumns * 2;
+                    if (itemIndex <= prependThreshold && this.state.gridWindowStart > 0) {
+                        this._prependGridChunk(grid, this.state.items, currentColumns);
+                    }
+                }
+
+                const currentRow = Math.floor(itemIndex / currentColumns);
+                this._syncGridWindow(grid, this.state.items, currentColumns, currentRow);
+            }
+        }
+    }
+
+    /**
+     * =========================================================================
+     * POSITION-BASED GRID WINDOW SYNC
+     * =========================================================================
+     * Called after every D-pad move or scroll event with the current "row" the
+     * user is on (0-indexed from the start of the full items array).
+     *
+     * Computes the ideal window based on fixed lookahead/lookbehind constants:
+     *   ROWS_ABOVE  — rows to keep rendered above the current view
+     *   ROWS_BELOW  — rows to keep rendered below the current view
+     *
+     * By tying eviction to the current position rather than to append/prepend
+     * operations, we get:
+     *   • Top eviction always happens exactly 1 row above the off-screen area
+     *     → completely invisible to the user (it's already scrolled past)
+     *   • No batch eviction of 3 rows at once — always exactly 1 row removed
+     *     per row the user advances
+     *   • Bottom eviction mirrors the same behaviour when scrolling up
+     *
+     * @param {HTMLElement} grid         - The #library-grid container element
+     * @param {Array}       items        - Full items array
+     * @param {number}      columns      - Grid column count
+     * @param {number}      currentRow   - Current row index (0-based) in items[]
+     * =========================================================================
+     */
+    _syncGridWindow(grid, items, columns, currentRow) {
+        if (!grid || !items || !columns) return;
+
+        // -----------------------------------------------------------------------
+        // WINDOW CONSTANTS
+        // -----------------------------------------------------------------------
+        // ROWS_ABOVE: rows to keep rendered above the current row.
+        //   2 rows = ~2 screen-heights of backward buffer. When the user is on
+        //   row N, rows 0..(N-3) are off-screen and safe to evict.
+        //
+        // ROWS_BELOW: rows to keep rendered below the current row.
+        //   5 rows = ~1.5 screen-heights of forward buffer before the next
+        //   _appendGridChunk fires.
+        // -----------------------------------------------------------------------
+        const ROWS_ABOVE = 2;
+        const ROWS_BELOW = 5;
+
+        // Ideal first/last item index in the window
+        const idealStart = Math.max(0, (currentRow - ROWS_ABOVE) * columns);
+        const idealEnd = Math.min(items.length, (currentRow + ROWS_BELOW + 1) * columns);
+
+        // -----------------------------------------------------------------------
+        // TOP EVICTION
+        // -----------------------------------------------------------------------
+        // If the window starts too early (rows are now behind the ROWS_ABOVE
+        // buffer), remove exactly one row at a time so each eviction corresponds
+        // to exactly one row of advancement — invisible because that row is
+        // already above the viewport.
+        // -----------------------------------------------------------------------
+        if (this.state.gridWindowStart < idealStart) {
+            const rowHeight = this._measureGridRowHeight(grid, columns);
+            if (rowHeight) {
+                const cardsToEvict = idealStart - this.state.gridWindowStart;
+                const allCards = grid.querySelectorAll('.media-card');
+                const count = Math.min(cardsToEvict, allCards.length);
+                for (let i = 0; i < count; i++) {
+                    allCards[i].remove();
+                }
+                this.state.gridWindowStart += count;
+
+                // Grow the top spacer by the same pixel amount so the scroll
+                // position is completely undisturbed
+                const spacer = grid.querySelector('#grid-top-spacer');
+                if (spacer) {
+                    spacer.style.height = `${Math.floor(this.state.gridWindowStart / columns) * rowHeight}px`;
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // BOTTOM EVICTION
+        // -----------------------------------------------------------------------
+        // Mirror of the top eviction — removes rendered rows from the bottom
+        // that have fallen outside the ROWS_BELOW buffer when scrolling up.
+        // Also happens invisibly because those rows are below the viewport.
+        // -----------------------------------------------------------------------
+        if (this.state.gridWindowEnd > idealEnd) {
+            const cardsToEvict = this.state.gridWindowEnd - idealEnd;
+            const allCards = grid.querySelectorAll('.media-card');
+            const total = allCards.length;
+            const count = Math.min(cardsToEvict, total);
+            for (let i = total - 1; i >= total - count && i >= 0; i--) {
+                allCards[i].remove();
+            }
+            this.state.gridWindowEnd -= count;
+        }
+    }
+
     _renderHorizontalRows(rows) {
         const grid = this.$('#library-grid');
         const pagination = this.$('#library-pagination');
@@ -2443,7 +3331,7 @@ class LibraryPage extends Page {
                 ParentId: this.state.libraryId,
                 GenreIds: genreId,
                 Limit: 10,
-                Fields: 'PrimaryImageAspectRatio,ProductionYear',
+                Fields: 'ProductionYear',
                 IncludeItemTypes: includeItemTypes,
                 Recursive: true,
                 SortBy: 'Random' // Randomize to make it look interesting?
@@ -2858,13 +3746,6 @@ class LibraryPage extends Page {
         this._renderViewModeModal();
     }
 
-    /**
-     * Render the view mode picker modal.
-     *
-     * Presents 5 available modes as radio-style option buttons with icons.
-     * The currently active mode is pre-selected. Applying a new mode immediately
-     * re-renders the grid and persists the choice to StorageService.
-     */
     _renderViewModeModal() {
         const overlay = this.$('#modal-overlay');
         if (!overlay) return;
@@ -2874,11 +3755,30 @@ class LibraryPage extends Page {
         this._prevSection = focusManager.getActiveSection();
 
         const current = this.state.viewMode;
+        let tempMode = current;
+        let tempGridMode = this.state.gridMode;
+        let tempColumns = this.state.gridColumns;
 
-        /*
-         * View mode options — each has a label i18n key, a mode value, and an
-         * inline SVG icon that visually communicates the layout style.
-         */
+        const colOptionsMap = {
+            poster: [4, 5, 6, 7],
+            'small-poster': [6, 8, 10, 12],
+            thumb: [3, 4, 5, 6],
+            banner: [2, 3, 4, 5]
+        };
+
+        const getColumnsHtml = (mode, currentVal) => {
+            const opts = colOptionsMap[mode] || [];
+            return opts
+                .map(
+                    (c) => `
+                <button class="tab-btn column-option-btn ${c === currentVal ? 'active' : ''}" data-cols="${c}" tabindex="0">
+                    ${c} ${i18n.t('Items') || 'Items'}
+                </button>
+            `
+                )
+                .join('');
+        };
+
         const modes = [
             {
                 value: 'poster',
@@ -2938,25 +3838,123 @@ class LibraryPage extends Page {
             }
         ];
 
+        const updateModalUI = () => {
+            const hasGridOptions = tempMode !== 'list';
+            const secGridMode = overlay.querySelector('#section-grid-mode');
+            const secCols = overlay.querySelector('#section-columns');
+
+            if (secGridMode) secGridMode.style.display = hasGridOptions ? 'block' : 'none';
+
+            if (secCols) {
+                if (hasGridOptions && tempGridMode === 'dynamic') {
+                    secCols.style.display = 'block';
+                    const colsContainer = overlay.querySelector('#columns-options');
+                    if (colsContainer) {
+                        colsContainer.innerHTML = getColumnsHtml(tempMode, tempColumns);
+
+                        // Bind events on new column buttons
+                        colsContainer.querySelectorAll('.column-option-btn').forEach((btn) => {
+                            btn.addEventListener('click', () => {
+                                tempColumns = parseInt(btn.dataset.cols, 10);
+                                colsContainer.querySelectorAll('.column-option-btn').forEach((b) => {
+                                    b.classList.toggle('active', parseInt(b.dataset.cols, 10) === tempColumns);
+                                });
+                            });
+                        });
+                    }
+                } else {
+                    secCols.style.display = 'none';
+                }
+            }
+
+            // Re-register focus sections as size/visibility changed
+            registerFocusSections();
+        };
+
+        const registerFocusSections = () => {
+            this.registerFocusSection('view-mode-options', overlay.querySelector('#view-mode-options'), {
+                orientation: 'horizontal',
+                leaveDown: tempMode !== 'list' ? 'grid-mode-options' : 'vm-actions',
+                leaveUp: 'vm-actions',
+                selector: '.view-mode-option-btn',
+                enterTo: 'active-element'
+            });
+
+            if (tempMode !== 'list') {
+                this.registerFocusSection('grid-mode-options', overlay.querySelector('#grid-mode-options'), {
+                    orientation: 'horizontal',
+                    leaveUp: 'view-mode-options',
+                    leaveDown: tempGridMode === 'dynamic' ? 'columns-options' : 'vm-actions',
+                    selector: '.grid-mode-btn',
+                    enterTo: 'active-element'
+                });
+
+                if (tempGridMode === 'dynamic') {
+                    this.registerFocusSection('columns-options', overlay.querySelector('#columns-options'), {
+                        orientation: 'horizontal',
+                        leaveUp: 'grid-mode-options',
+                        leaveDown: 'vm-actions',
+                        selector: '.column-option-btn',
+                        enterTo: 'active-element'
+                    });
+                }
+            }
+
+            this.registerFocusSection('vm-actions', overlay.querySelector('#vm-actions'), {
+                orientation: 'horizontal',
+                leaveUp:
+                    tempMode === 'list'
+                        ? 'view-mode-options'
+                        : tempGridMode === 'dynamic'
+                          ? 'columns-options'
+                          : 'grid-mode-options',
+                selector: 'button'
+            });
+        };
+
         overlay.innerHTML = `
-            <div class="library-modal view-mode-modal">
-                <h2 class="modal-title">${i18n.t('ViewMode')}</h2>
-                <div class="view-mode-options" id="view-mode-options">
-                    ${modes
-                        .map(
-                            (m) => `
-                        <button class="view-mode-option-btn ${m.value === current ? 'selected' : ''}"
-                                data-mode="${m.value}"
-                                tabindex="0">
-                            <span class="vm-icon-wrap">${m.icon}</span>
-                            <span class="vm-label">${i18n.t(m.label)}</span>
-                        </button>
-                    `
-                        )
-                        .join('')}
+            <div class="library-modal view-mode-modal" style="width: 800px; max-width: 90%; max-height: 85vh; padding: 30px;">
+                <h2 class="modal-title" style="margin-bottom: 20px;">${i18n.t('ViewMode')}</h2>
+                
+                <!-- Layout Style Category Section -->
+                <div class="view-mode-section" style="margin-bottom: 25px;">
+                    <h3 class="section-subtitle" style="font-size: 1.2rem; opacity: 0.7; margin-bottom: 12px;">Layout Style</h3>
+                    <div class="view-mode-options" id="view-mode-options" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        ${modes
+                            .map(
+                                (m) => `
+                            <button class="view-mode-option-btn ${m.value === tempMode ? 'selected' : ''}"
+                                    data-mode="${m.value}"
+                                    tabindex="0">
+                                <span class="vm-icon-wrap">${m.icon}</span>
+                                <span class="vm-label">${i18n.t(m.label)}</span>
+                            </button>
+                        `
+                            )
+                            .join('')}
+                    </div>
                 </div>
-                <div class="modal-actions" id="vm-actions">
+
+                <!-- Grid Mode Toggle (Static vs Dynamic) -->
+                <div class="view-mode-section" id="section-grid-mode" style="margin-bottom: 25px; display: ${tempMode !== 'list' ? 'block' : 'none'};">
+                    <h3 class="section-subtitle" style="font-size: 1.2rem; opacity: 0.7; margin-bottom: 12px;">Sizing Mode</h3>
+                    <div class="grid-mode-options" id="grid-mode-options" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <button class="tab-btn grid-mode-btn ${tempGridMode === 'static' ? 'active' : ''}" data-gmode="static" tabindex="0">Static Columns</button>
+                        <button class="tab-btn grid-mode-btn ${tempGridMode === 'dynamic' ? 'active' : ''}" data-gmode="dynamic" tabindex="0">Dynamic Columns</button>
+                    </div>
+                </div>
+
+                <!-- Dynamic Columns Options Selector -->
+                <div class="view-mode-section" id="section-columns" style="margin-bottom: 25px; display: ${tempMode !== 'list' && tempGridMode === 'dynamic' ? 'block' : 'none'};">
+                    <h3 class="section-subtitle" style="font-size: 1.2rem; opacity: 0.7; margin-bottom: 12px;">Items Per Row</h3>
+                    <div class="columns-options" id="columns-options" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <!-- Generated Dynamically -->
+                    </div>
+                </div>
+
+                <div class="modal-actions-library" id="vm-actions" style="margin-top: 30px; display: flex; justify-content: flex-end; gap: 15px;">
                     <button class="modal-action-btn close" id="btn-vm-close">${i18n.t('ButtonClose')}</button>
+                    <button class="modal-action-btn apply" id="btn-vm-apply" !important;">${i18n.t('ButtonApply') || 'Apply'}</button>
                 </div>
             </div>
         `;
@@ -2965,49 +3963,69 @@ class LibraryPage extends Page {
         overlay.classList.add('visible');
         overlay.setAttribute('aria-hidden', 'false');
 
-        // Track temp selection before applying
-        let tempMode = current;
-
-        // Option button click handler: mark selected and immediately apply preview
+        // Style/Mode Button Listeners
         overlay.querySelectorAll('.view-mode-option-btn').forEach((btn) => {
             btn.addEventListener('click', () => {
-                // Update temp and visual selection state
                 tempMode = btn.dataset.mode;
                 overlay.querySelectorAll('.view-mode-option-btn').forEach((b) => {
                     b.classList.toggle('selected', b.dataset.mode === tempMode);
                 });
 
-                // Apply immediately: re-render grid with new mode and persist
-                this.state.viewMode = tempMode;
-                storage.setItem(`pref:library:viewMode:${this.state.libraryId}`, tempMode);
-                this._renderGrid(this.state.items);
+                // When switching modes, check if we need to load columns default value
+                const defaultCols = this._getDefaultColumnsForMode(tempMode);
+                const colsKey = `pref:library:gridColumns:${this.state.libraryId}:${tempMode}`;
+                const savedCols = parseInt(storage.getItem(colsKey), 10);
+                tempColumns = !isNaN(savedCols) ? savedCols : defaultCols;
 
-                log.info(`[ViewMode] Changed to: ${tempMode} for library ${this.state.libraryId}`);
-
-                // Close modal after selection (single-action UX — no Apply button needed)
-                this._closeModal();
+                updateModalUI();
             });
         });
 
+        overlay.querySelectorAll('.grid-mode-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                tempGridMode = btn.dataset.gmode;
+                overlay.querySelectorAll('.grid-mode-btn').forEach((b) => {
+                    b.classList.toggle('active', b.dataset.gmode === tempGridMode);
+                });
+                updateModalUI();
+            });
+        });
+
+        // Initialize UI
+        updateModalUI();
+
+        // Close / Apply Buttons
         this.$('#btn-vm-close')?.addEventListener('click', () => this._closeModal());
 
-        // Register FocusManager sections for D-pad navigation inside the modal
-        this.registerFocusSection('view-mode-options', overlay.querySelector('#view-mode-options'), {
-            orientation: 'horizontal',
-            leaveDown: 'vm-actions',
-            leaveUp: 'vm-actions',
-            selector: '.view-mode-option-btn',
-            enterTo: 'active-element' // Land on the currently selected mode
+        this.$('#btn-vm-apply')?.addEventListener('click', () => {
+            // Apply all states
+            this.state.viewMode = tempMode;
+            this.state.gridMode = tempGridMode;
+            this.state.gridColumns = tempColumns;
+
+            // Persist to local storage
+            storage.setItem(`pref:library:viewMode:${this.state.libraryId}`, tempMode);
+            storage.setItem(`pref:library:gridMode:${this.state.libraryId}`, tempGridMode);
+            storage.setItem(`pref:library:gridColumns:${this.state.libraryId}:${tempMode}`, tempColumns);
+
+            // Re-fetch items with the aligned limit for the new column count,
+            // so every row renders full (no partial last row).
+            this.state.startIndex = 0;
+            this._closeModal();
+            this._loadItems();
+
+            log.info(
+                `[ViewMode] Applied configuration: Mode=${tempMode}, Grid=${tempGridMode}, Columns=${tempColumns}`
+            );
         });
 
-        this.registerFocusSection('vm-actions', overlay.querySelector('#vm-actions'), {
-            orientation: 'horizontal',
-            leaveUp: 'view-mode-options',
-            selector: 'button'
-        });
-
-        // Start focus on the options row
-        this.setActiveSection('view-mode-options');
+        // Set initial focus to Style Row
+        setTimeout(() => {
+            const selected =
+                overlay.querySelector('.view-mode-option-btn.selected') ||
+                overlay.querySelector('.view-mode-option-btn');
+            if (selected) focusManager.focusElement(selected);
+        }, 50);
     }
 
     _renderSortModal(sortOptions, orderOptions) {
@@ -3066,7 +4084,7 @@ class LibraryPage extends Page {
                     </div>
                 </div>
 
-                <div class="modal-actions">
+                <div class="modal-actions-library">
                     <button class="modal-action-btn close" id="btn-sort-close" data-i18n="ButtonClose">${i18n.t('ButtonClose')}</button>
                     <button class="modal-action-btn apply" id="btn-sort-apply" data-i18n="ButtonApply">${i18n.t('ButtonApply')}</button>
                 </div>
@@ -3145,7 +4163,7 @@ class LibraryPage extends Page {
             leaveDown: 'sort-actions'
         });
 
-        this.registerFocusSection('sort-actions', overlay.querySelector('.modal-actions'), {
+        this.registerFocusSection('sort-actions', overlay.querySelector('.modal-actions-library'), {
             orientation: 'horizontal',
             onMove: (direction) => {
                 if (direction === 'up') {
@@ -3316,7 +4334,7 @@ class LibraryPage extends Page {
                     </div>
                 </div>
 
-                <div class="modal-actions">
+                <div class="modal-actions-library">
                     <button class="modal-action-btn clear" id="btn-filter-clear" data-i18n="ButtonClear">${i18n.t('ButtonClear')}</button>
                     <button class="modal-action-btn close" id="btn-filter-close" data-i18n="ButtonClose">${i18n.t('ButtonClose')}</button>
                     <button class="modal-action-btn apply" id="btn-filter-apply" data-i18n="ButtonApply">${i18n.t('ButtonApply')}</button>
@@ -3598,7 +4616,7 @@ class LibraryPage extends Page {
             scroll: true // Enable automatic scrolling for TV navigation
         });
 
-        this.registerFocusSection('filter-actions', overlay.querySelector('.modal-actions'), {
+        this.registerFocusSection('filter-actions', overlay.querySelector('.modal-actions-library'), {
             orientation: 'horizontal',
             onMove: (direction) => {
                 if (direction === 'up') {

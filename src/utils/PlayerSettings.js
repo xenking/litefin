@@ -37,6 +37,52 @@ const DEFAULTS = {
     // Enable TrueHD passthrough (auto resolves through device capabilities before boolean use)
     enableTrueHd: 'auto',
 
+    // -------------------------------------------------------------------------
+    // EAC3 (E-AC3 / Dolby Digital Plus) FORCE STATE
+    // -------------------------------------------------------------------------
+    // On some platforms (WebOS, web browsers), the canPlayType / isTypeSupported
+    // probe for EAC3 returns '' (unsupported) even when the hardware is capable.
+    // This is a known bug — particularly on LG WebOS TVs where the Chromium build
+    // reports no EAC3 support, yet the native media pipeline passes it through
+    // eARC just fine.
+    //
+    // When this reports false:
+    //   - EAC3 is excluded from the DirectPlay audio codec list (Jellyfin treats
+    //     source EAC3 tracks as unsupported and forces an unnecessary transcode).
+    //   - The transcode target codec check (WebProfile) rejects EAC3 even when
+    //     the user has chosen it, silently falling back to AAC.
+    //
+    // 'auto'    — trust the hardware probe (default; may be wrong on some TVs)
+    // 'enable'  — force EAC3 into the profile regardless of what the probe says
+    // 'disable' — explicitly exclude EAC3 even if the probe says it is supported
+    enableEac3: 'auto',
+    enableMp2: 'auto',
+
+    // -------------------------------------------------------------------------
+    // PREFERRED TRANSCODE AUDIO CODEC
+    // -------------------------------------------------------------------------
+    // Controls which audio codec Jellyfin targets when it must transcode the
+    // audio stream (e.g. DTS is not natively supported, so it transcodes to one
+    // of these lossy surround formats).
+    //
+    // Valid values:
+    //   'eac3'  — E-AC3 / Dolby Digital Plus: higher quality, ~640 kbps cap.
+    //             Modern AVRs (HDMI 1.4+, eARC) handle this natively. Default.
+    //   'ac3'   — AC3 / Dolby Digital: widest compatibility, capped at 640 kbps
+    //             on the 5.1 layout. Best for older receivers.
+    //   'aac'   — Advanced Audio Coding: stereo/multichannel, universal browser
+    //   'auto'        — Auto (Prefer E-AC3): defaults to EAC3 if supported/allowed, fallback to AC3 then AAC.
+    //   'prefer_ac3'  — Prefer AC3: uses AC3 first, with AAC fallback.
+    //   'prefer_aac'  — Prefer AAC.
+    //   'force_eac3'  — Force/Only E-AC3.
+    //   force_ac3'   — Force/Only AC3.
+    //   'force_aac'   — Force/Only AAC.
+    //   'force_mp3'   — Force/Only MP3.
+    //
+    // NOTE: This only affects HLS transcode output.DirectPlay/DirectStream paths
+    // bypass this entirely — the source audio is copied as-is in those cases.
+    transcodeAudioCodec: 'auto',
+
     // Allow FLAC audio in video containers (MKV, MP4, etc.) to DirectPlay.
     // Disabled by default: FLAC demuxing inside video containers causes a ~2s
     // A/V sync drift on Tizen hardware (the audio buffer diverges from the video
@@ -45,7 +91,10 @@ const DEFAULTS = {
     enableFlacInVideo: false,
 
     // Audio normalization mode ('Off', 'TrackGain', 'AlbumGain')
-    audioNormalization: 'Off',
+    audioNormalization: 'TrackGain',
+
+    // Disable VBR audio encoding (force CBR)
+    disableVbrAudio: false,
 
     // =========================================================================
     // VIDEO SETTINGS
@@ -70,6 +119,9 @@ const DEFAULTS = {
     // Remember tracks for session (automatically carry active audio and subtitle to next episode)
     rememberTracksForSession: true,
 
+    // Prefer external subtitle tracks over internal ones
+    preferExternalSubtitles: false,
+
     // Subtitle text size ('small', 'medium', 'large', 'larger', 'extralarge', 'custom')
     subtitleSize: 'medium',
 
@@ -80,6 +132,7 @@ const DEFAULTS = {
     subtitleWeight: 'normal',
 
     // Subtitle drop shadow ('none', 'uniform', 'dropshadow', 'raised', 'depressed', 'border')
+    // Subtitle shadow style (uniform, border, uniform_border, dropshadow, raised, depressed, none)
     subtitleDropShadow: 'uniform',
 
     // Drop shadow color
@@ -91,8 +144,11 @@ const DEFAULTS = {
     // Drop shadow blur radius (px)
     subtitleDropShadowBlur: 6,
 
-    // Subtitle border width (px, used when subtitleDropShadow is 'border')
+    // Subtitle border width (px, used when subtitleDropShadow is 'border' or 'uniform_border')
     subtitleBorderWidth: 3,
+
+    // Subtitle border opacity (0-100, used when subtitleDropShadow is 'border' or 'uniform_border')
+    subtitleBorderOpacity: 100,
 
     // Custom subtitle font (empty = system default)
     subtitleFont: '',
@@ -103,6 +159,28 @@ const DEFAULTS = {
 
     // Override container fonts with the chosen ASS font (or system fallback)
     subtitleOverrideAssFonts: false,
+
+    /* -------------------------------------------------------------------------
+       ASS SUBTITLE RENDERING ENGINE
+       -------------------------------------------------------------------------
+       Determines which engine is used to parse and render styled ASS/SSA cues:
+         'libjass'    — DOM-based native JS renderer. High performance on older,
+                        limited hardware, but doesn't support complex typesetting.
+         'libass-wasm' — WASM-based libass port via SubtitlesOctopus. Extremely
+                         accurate styling and drawing support.
+         'assjs'      — Lightweight DOM-based renderer (ass.js). Uses browser
+                        native font fallback. Experimental on Tizen AVPlay.
+       ------------------------------------------------------------------------- */
+    assRenderer: 'libjass',
+
+    // Enable extracting and loading fonts embedded in media containers
+    subtitleAssLoadContainerFonts: true,
+
+    // Drop all ASS animations (karaoke, \t, \move, fade, etc.) for performance
+    subtitleAssDropAnimations: false,
+
+    // Scale down the subtitle canvas to improve performance (1.0 = full res)
+    subtitleAssPrescaleFactor: 0.8,
 
     // Global font scale multiplier for ASS subtitles
     subtitleFontScale: 1.0,
@@ -127,6 +205,10 @@ const DEFAULTS = {
 
     // Enable user-defined outline and shadow thickness overrides for ASS
     subtitleOverrideAssOutlineShadow: false,
+
+    // Master toggle for ASS style modifications (font, outline, shadow, scaling, spacing).
+    // When disabled, ASS subtitles render using their original embedded styles as-is.
+    enableAssStyleModifications: false,
 
     // Force text-only rendering for ASS/SSA (disables libjass)
     disableAssStyling: false,
@@ -156,6 +238,14 @@ const DEFAULTS = {
        affecting the standard readability of subtitles in SDR content.
        ------------------------------------------------------------------------- */
     subtitleTextOpacityHdr: 100,
+
+    /* -------------------------------------------------------------------------
+       OSD HDR DARKER WHITE
+       -------------------------------------------------------------------------
+       Toggle to make the whole OSD darker in HDR by overriding white/light-grey
+       elements with subtitle dark grey color instead.
+       ------------------------------------------------------------------------- */
+    osdHdrDarkerWhite: true,
 
     // Subtitle background color
     subtitleTextBackground: 'transparent',
@@ -294,6 +384,22 @@ const DEFAULTS = {
     // Trailer playback mode ('internal_proxy', 'internal_iframe', 'external')
     trailerPlaybackMode: 'internal_proxy',
 
+    /*
+     * Await Tracks Before Playback
+     * -------------------------------------------------------------------------
+     * When enabled, the player page will hold the loading screen and defer
+     * initiating hardware playback until all audio and subtitle track mapping
+     * has fully completed. This ensures that the first rendered frame already
+     * has the correct subtitle cues and audio channel mapped.
+     *
+     * Trade-off: Deferring playback adds a brief startup delay (especially
+     * for remote external subtitles that need to be fetched/parsed over HTTP),
+     * but prevents audio/subtitle flashing and out-of-sync presentation.
+     *
+     * Default: true (hold playback until subtitle cues and audio tracks are loaded).
+     */
+    awaitTracksBeforePlayback: true,
+
     // Auto-chain mode: when both local AND remote trailers exist and this is
     // true, the TrailerDialog selection screen is skipped entirely. Instead,
     // the local trailer plays immediately via the native player. When it ends
@@ -339,6 +445,15 @@ const DEFAULTS = {
      */
     enableNextUpDialog: true,
 
+    // Up Next dialog layout style ('normal', 'no_image', 'compact', 'button')
+    nextUpDialogStyle: 'normal',
+
+    // Up Next dialog scale multiplier (e.g. 0.75, 1.0, 1.25, 1.5)
+    nextUpDialogScale: 1.0,
+
+    // Up Next dialog trigger point mode ('default', 'time_fallback', 'seconds_20', 'seconds_30')
+    nextUpTriggerMode: 'default',
+
     // Show trickplay (sprite-sheet) thumbnail previews when scrubbing through videos.
     // Disable to skip all trickplay calculations and image fetches entirely.
     enableTrickplay: true,
@@ -373,6 +488,25 @@ const DEFAULTS = {
      */
     osdFocusRestoreMode: 'timeout',
 
+    /*
+     * OK/Enter Wake-Up Behavior
+     * -------------------------------------------------------------------------
+     * Whether the OK/Enter press that reveals a hidden OSD only shows the
+     * controls, instead of also running the action that holds focus at that
+     * moment. Only affects that first wake-up press — once the controls are
+     * visible, OK always runs the focused action regardless of this setting.
+     *
+     *   false (default) — Reveals the OSD AND runs the pre-parked focused
+     *                     action, which is Play/Pause by default. This means
+     *                     the very first OK press during playback pauses the
+     *                     video.
+     *   true            — Reveals the controls only. No action runs on that
+     *                     first press; the user presses OK again once the
+     *                     desired button holds focus. Prevents accidentally
+     *                     pausing playback just to check the floating controls.
+     */
+    okShowOsdOnly: false,
+
     // Keep focus on subtitle offset menu (prevent auto-hide)
     keepFocusOnSubtitleOffset: true,
 
@@ -402,6 +536,12 @@ const DEFAULTS = {
     // Preview/next-episode teaser segment action
     skipActionPreview: 'None',
 
+    // Segment data source preference ('both', 'server', 'chapters')
+    //   'both'     — Merge Intro-Skipper server plugin & Chapter markers (default)
+    //   'server'   — Only use Intro-Skipper server plugin
+    //   'chapters' — Only use Chapter markers (disable server-reported segments)
+    skipSegmentSource: 'both',
+
     // Show show/movie logo in OSD instead of text title
     osdShowLogo: false,
 
@@ -415,7 +555,40 @@ const DEFAULTS = {
     osdLogoSize: 'medium',
 
     // Background opacity of the track menus (0-100)
-    osdTrackMenuBgOpacity: 85
+    osdTrackMenuBgOpacity: 85,
+
+    // Background gradient opacity of the OSD (0-100)
+    osdGradientOpacity: 75,
+
+    // Position of playback control buttons relative to seek bar ('above', 'below')
+    osdButtonsLocation: 'above',
+
+    // Layout configuration of player OSD buttons ('left', 'centered')
+    osdLayout: 'left',
+
+    // Toggle states for showing/hiding specific player buttons
+    osdHideFavorite: true,
+    osdHideInfo: true,
+
+    /*
+     * =========================================================================
+     * BACK BUTTON VISIBILITY DEFAULT
+     * =========================================================================
+     * For native TV apps (Tizen / WebOS), we hide the OSD back button by default
+     * (true) since physical remotes provide a dedicated hardware Back key.
+     *
+     * For desktop/mobile web browsers, we display the OSD back button by default
+     * (false) to ensure users have a clear visual navigation path to return
+     * to the details page without relying on keyboard shortcuts or browser back.
+     * =========================================================================
+     */
+    osdHideBackButton: !platformInfo.isWeb,
+
+    // Combine skip (seek, chapter, track) buttons into single buttons with multi-click actions
+    osdCombineSkipButtons: false,
+
+    // Enable screen lock button in the player overlay (next to play/pause)
+    enableScreenLock: false
 };
 
 /**
@@ -459,7 +632,8 @@ export const PlayerSettings = {
             key === 'enableHDR' ||
             key === 'enableDolbyVision' ||
             key === 'enableDts' ||
-            key === 'enableTrueHd'
+            key === 'enableTrueHd' ||
+            key === 'enableMp2'
         ) {
             if (stored === 'true') return 'enable';
             if (stored === 'false') return 'disable';

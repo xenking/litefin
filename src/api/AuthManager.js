@@ -28,12 +28,14 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { state } from '../core/StateManager.js';
-import { api, ServerUnreachableError } from './ApiClient.js';
+import { api, ServerUnreachableError, sendWakeOnLan } from './ApiClient.js';
 import { tizenAdapter } from '../tizen/TizenAdapter.js';
 import { webosAdapter } from '../webos/WebOSAdapter.js';
 import { platformInfo } from '../utils/PlatformInfo.js';
 import { storage } from '../utils/StorageService.js';
 import { buildJellyfinProfile } from './DeviceProfile.js';
+import { focusManager } from '../ui/FocusManager.js';
+import { imageCache } from '../utils/ImageCache.js';
 import { logger } from '../utils/Logger.js';
 
 const log = logger.create('AuthManager');
@@ -270,11 +272,91 @@ class AuthManager {
         log.info('API configured with saved credentials');
 
         // Validate token with a server round-trip
+        // =====================================================================
+        // WAKE-ON-LAN (WOL) INVOCATION
+        // =====================================================================
+        // If Wake-on-LAN on startup is enabled and a server MAC address exists
+        // in settings, we broadcast the Magic Packet early to wake up the server.
+        // =====================================================================
+        const enableWol = storage.getItem('pref:enableWolOnStartup') === 'true';
+        const wolMac = storage.getItem('pref:wolMacAddress');
+
+        if (enableWol && wolMac) {
+            log.info(`Wake-on-LAN on startup is active. Sending Magic Packet to ${wolMac}...`);
+            // Fire packet asynchronously and don't block the startup pipeline.
+            // If the server was already running, the connection will succeed instantly.
+            // If it was asleep, our retry loop below will wait for it to boot.
+            sendWakeOnLan(wolMac).catch((err) => {
+                log.warn('Failed to send WOL magic packet:', err);
+            });
+        }
+
+        // =====================================================================
+        // TOKEN VALIDATION & RETRY LOOP
+        // =====================================================================
+        // Attempt to validate the saved credentials against the Jellyfin server.
+        // If the server is unreachable (down/asleep) and WOL is enabled, we
+        // transparently retry the connection up to 6 times (~15 seconds) to
+        // allow the server sufficient time to wake up and bind its ports.
+        // =====================================================================
+        let user = null;
+        let serverInfoResolved = false;
+
+        // Read Extended Wait preference key to allow cold shutdown server boots (~90s total)
+        const extendedWait = storage.getItem('pref:enableWolExtendedWait') === 'true';
+
+        // Define retry constraints: 25 attempts (~90s) if Extended Wait is active, else 6 attempts (~18s) if WOL is active.
+        const maxAttempts = enableWol && wolMac ? (extendedWait ? 25 : 6) : 1;
+        const retryDelayMs = 3000;
+
         try {
-            log.info('Validating token by fetching current user...');
-            // Use an 8s timeout instead of 30s to quickly detect offline hosts on boot
-            const user = await api.getCurrentUser({ timeout: 8000 });
-            log.info('Token valid, user:', user?.Name);
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    log.info(`Validating token by fetching current user (attempt ${attempt}/${maxAttempts})...`);
+
+                    // Fire getPublicInfo in parallel with getCurrentUser.
+                    // We use shorter timeouts on retries to fail-fast and move onto the next try.
+                    const currentTimeout = attempt === 1 ? 5000 : 3000;
+                    const userPromise = api.getCurrentUser({ timeout: currentTimeout });
+
+                    const serverInfoPromise = api
+                        .getPublicInfo()
+                        .then((info) => {
+                            state.set('server:info', info);
+                            serverInfoResolved = true;
+                        })
+                        .catch((e) => log.warn(`Failed to fetch server info on attempt ${attempt}:`, e));
+
+                    // Await user profiles check first
+                    user = await userPromise;
+                    log.info('Token valid, user:', user?.Name);
+
+                    // Wait for the parallel server info check to settle too
+                    try {
+                        await serverInfoPromise;
+                    } catch (_) {}
+
+                    // Break out of the retry loop upon successful connection
+                    break;
+                } catch (error) {
+                    log.warn(`Token validation failed on attempt ${attempt}/${maxAttempts}:`, error);
+
+                    // Check if this error represents a network/routing unreachability condition.
+                    const isUnreachable =
+                        error instanceof ServerUnreachableError ||
+                        (error.status === undefined && error.message && error.message.toLowerCase().includes('fetch'));
+
+                    // If this is the last allowed attempt, or the error is a definitive failure
+                    // (like 401/403 Unauthorized which won't change on retry), propagate it.
+                    if (attempt === maxAttempts || !isUnreachable) {
+                        throw error;
+                    }
+
+                    // Wait for the defined cooldown interval before attempting another probe
+                    log.info(`Server is unreachable. Waiting ${retryDelayMs}ms for Wake-on-LAN boot cycle...`);
+                    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+                }
+            }
 
             // Sync the stored session with fresh user data from the server
             this._saveSession({
@@ -291,19 +373,12 @@ class AuthManager {
             state.set('server:offline', false);
             state.set('user:sessionCount', this._loadSessions().length);
 
-            // Report capabilities to make this user visible as "online" in the dashboard
-            log.info('Reporting capabilities to server...');
-            try {
-                await api.reportCapabilities({
-                    ...SUPPORTED_CAPABILITIES,
-                    DeviceProfile: buildJellyfinProfile()
-                });
-                log.info('✓ Capabilities reported on restore — user is online');
-            } catch (e) {
-                log.error('✗ Failed to report capabilities on restore:', e);
-            }
+            // Defer capabilities reporting and WebSocket open — non-critical for first paint
+            api.reportCapabilities({
+                ...SUPPORTED_CAPABILITIES,
+                DeviceProfile: buildJellyfinProfile()
+            }).catch((e) => log.error('✗ Failed to report capabilities on restore:', e));
 
-            // Open WebSocket for real-time dashboard presence
             api.openWebSocket();
 
             return true;
@@ -340,46 +415,89 @@ class AuthManager {
 
     /**
      * Connect to a Jellyfin server.
-     * @param {string} serverUrl - Server URL
-     * @returns {Promise<Object>} Server public info
+     * =========================================================================
+     * Configures the ApiClient target server URL and fetches server metadata.
+     * If Wake-on-LAN is enabled and a target MAC address is set in preferences,
+     * this method automatically dispatches a UDP magic packet and retries the
+     * connection probe up to 6 times (~15 seconds) to allow sleeping servers
+     * time to boot up.
+     * =========================================================================
+     * @param {string} serverUrl - Target server URL
+     * @returns {Promise<Object>} Server public info object
      */
     async connectToServer(serverUrl) {
         log.info(`Connecting to ${serverUrl}`);
 
         api.setServer(serverUrl);
 
-        try {
-            // Short timeout so the UI doesn't hang if the user types a dead IP
-            const info = await api.getPublicInfo({ timeout: 8000 });
+        // =====================================================================
+        // WAKE-ON-LAN (WOL) INVOCATION FOR CONNECT TO SERVER
+        // =====================================================================
+        // Read Wake-on-LAN preference settings directly from global storage
+        const enableWol = storage.getItem('pref:enableWolOnStartup') === 'true';
+        const wolMac = storage.getItem('pref:wolMacAddress');
 
-            // Persist the server URL
-            storage.setItem(STORAGE_KEYS.SERVER_URL, serverUrl);
+        if (enableWol && wolMac) {
+            log.info(`Wake-on-LAN is enabled. Triggering Magic Packet for server connect to ${wolMac}...`);
+            sendWakeOnLan(wolMac).catch((err) => {
+                log.warn('Failed to send WOL magic packet during connectToServer:', err);
+            });
+        }
 
-            // Persist the server name for friendly display in saved servers
-            if (info && info.ServerName) {
-                try {
-                    let namesMap = {};
-                    const rawNames = storage.getItem(STORAGE_KEYS.SERVER_NAMES);
-                    if (rawNames) namesMap = JSON.parse(rawNames);
-                    namesMap[serverUrl] = info.ServerName;
-                    storage.setItem(STORAGE_KEYS.SERVER_NAMES, JSON.stringify(namesMap));
-                } catch (e) {
-                    log.warn('Failed to save server name to map', e);
+        // Read Extended Wait preference key to allow cold shutdown server boots (~90s total)
+        const extendedWait = storage.getItem('pref:enableWolExtendedWait') === 'true';
+
+        // Set max retry attempts: 25 attempts (~90s) if Extended Wait is active, else 6 attempts (~18s)
+        const maxAttempts = enableWol && wolMac ? (extendedWait ? 25 : 6) : 1;
+        const retryDelayMs = 3000;
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                log.info(`Attempting server connection probe (attempt ${attempt}/${maxAttempts})...`);
+
+                // Short timeout per probe so UI doesn't lock up on dead addresses
+                const currentTimeout = attempt === 1 ? 5000 : 3000;
+                const info = await api.getPublicInfo({ timeout: currentTimeout });
+
+                // Persist the server URL
+                storage.setItem(STORAGE_KEYS.SERVER_URL, serverUrl);
+
+                // Persist the server name for friendly display in saved servers list
+                if (info && info.ServerName) {
+                    try {
+                        let namesMap = {};
+                        const rawNames = storage.getItem(STORAGE_KEYS.SERVER_NAMES);
+                        if (rawNames) namesMap = JSON.parse(rawNames);
+                        namesMap[serverUrl] = info.ServerName;
+                        storage.setItem(STORAGE_KEYS.SERVER_NAMES, JSON.stringify(namesMap));
+                    } catch (e) {
+                        log.warn('Failed to save server name to map', e);
+                    }
+                }
+
+                state.set('server:connected', true);
+                state.set('server:offline', false);
+                state.set('server:info', info);
+
+                eventBus.emit('auth:serverConnected', info);
+
+                log.info(`Connected to ${info.ServerName} (v${info.Version})`);
+                return info;
+            } catch (error) {
+                lastError = error;
+                log.warn(`Connection attempt ${attempt}/${maxAttempts} failed:`, error);
+
+                // Wait before next retry iteration if more attempts remain
+                if (attempt < maxAttempts) {
+                    log.info(`Waiting ${retryDelayMs}ms for server to boot before next retry probe...`);
+                    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
                 }
             }
-
-            state.set('server:connected', true);
-            state.set('server:offline', false);
-            state.set('server:info', info);
-
-            eventBus.emit('auth:serverConnected', info);
-
-            log.info(`Connected to ${info.ServerName} (v${info.Version})`);
-            return info;
-        } catch (error) {
-            state.set('server:connected', false);
-            throw new Error(`Failed to connect: ${error.message}`);
         }
+
+        state.set('server:connected', false);
+        throw new Error(`Failed to connect: ${lastError ? lastError.message : 'Server unreachable'}`);
     }
 
     /**
@@ -604,6 +722,31 @@ class AuthManager {
     async switchUser(userId) {
         log.info(`Switching to user ${userId}...`);
 
+        /*
+         * ====================================================================
+         * FULL USER-SCOPED STATE & CACHE INVALIDATION
+         * ====================================================================
+         * When switching user accounts, we MUST wipe all cached view models,
+         * row structures, details pages, search results, and focus positions
+         * associated with the previous session. Each Jellyfin user has different
+         * library permissions, watched indicators, and custom row orderings.
+         * Failure to clear all prefixes causes cross-account state contamination.
+         * ====================================================================
+         */
+        state.clearByPrefix('home:');
+        state.clearByPrefix('library:');
+        state.clearByPrefix('details:');
+        state.clearByPrefix('favorites:');
+        state.clearByPrefix('search:');
+        state.clearByPrefix('person:');
+        state.clearByPrefix('player:');
+
+        // Clear focus memory so old user's spatial focus targets don't persist
+        focusManager.clearMemory();
+
+        // Abort in-flight prewarm requests and clear image cache
+        imageCache.clear();
+
         const sessions = this._loadSessions();
         const session = sessions.find((s) => s.userId === userId);
 
@@ -681,6 +824,27 @@ class AuthManager {
     async logout() {
         log.info('Logging out current user...');
 
+        /*
+         * ====================================================================
+         * FULL USER-SCOPED STATE & CACHE INVALIDATION
+         * ====================================================================
+         * Wipe all stored session state and focus memories for the user being logged out.
+         * ====================================================================
+         */
+        state.clearByPrefix('home:');
+        state.clearByPrefix('library:');
+        state.clearByPrefix('details:');
+        state.clearByPrefix('favorites:');
+        state.clearByPrefix('search:');
+        state.clearByPrefix('person:');
+        state.clearByPrefix('player:');
+
+        // Clear focus manager memory
+        focusManager.clearMemory();
+
+        // Abort in-flight prewarm requests and clear image cache
+        imageCache.clear();
+
         const activeUserId = storage.getItem(STORAGE_KEYS.ACTIVE_USER);
         const sessions = this._loadSessions();
         const session = sessions.find((s) => s.userId === activeUserId);
@@ -695,12 +859,23 @@ class AuthManager {
 
             log.info('Notifying server of logout...');
             try {
+                /*
+                 * Construct appropriate headers for the logout request.
+                 * If we are connected to an Emby server, we must supply
+                 * the token in the dedicated 'X-Emby-Token' header.
+                 */
+                const headers = {
+                    Authorization: authHeader,
+                    'Content-Type': 'application/json'
+                };
+
+                if (api.isEmby()) {
+                    headers['X-Emby-Token'] = session.accessToken;
+                }
+
                 await fetch(url, {
                     method: 'POST',
-                    headers: {
-                        'X-Emby-Authorization': authHeader,
-                        'Content-Type': 'application/json'
-                    }
+                    headers: headers
                 });
                 log.info('Server notified of logout');
             } catch (e) {

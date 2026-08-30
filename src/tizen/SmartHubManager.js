@@ -39,11 +39,14 @@
  */
 
 import { api } from '../api/ApiClient.js';
+import { auth } from '../api/index.js';
 import { tizenAdapter } from './TizenAdapter.js';
 import { eventBus } from '../core/EventBus.js';
 import { state } from '../core/StateManager.js';
 import { router } from '../core/Router.js';
 import { logger } from '../utils/Logger.js';
+import { pinManager } from '../utils/PinManager.js';
+import { storage } from '../utils/StorageService.js';
 
 const log = logger.create('SmartHubManager');
 
@@ -53,10 +56,6 @@ const log = logger.create('SmartHubManager');
 
 /* How often (after a completed update) to push a fresh preview. */
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-
-/* Tile limits per section — Samsung recommends keeping this small. */
-const NEXT_UP_LIMIT = 2;
-const RESUME_LIMIT = 4;
 
 /* Named local MessagePort that the ytresolver service sends its ACK to. */
 const ACK_PORT_NAME = 'SmartHubAck';
@@ -84,6 +83,19 @@ class SmartHubManager {
 
         /** @type {Object|null} - Last successfully built preview JSON (in-memory cache). */
         this._cachedJson = null;
+
+        /**
+         * @type {Object|null} - A deep-link target held back because the active
+         * profile is PIN-locked. Replayed once the profile is unlocked.
+         */
+        this._pendingDeepLink = null;
+
+        /**
+         * @type {boolean} - True once the active profile has been unlocked this
+         * run (a real auth:login fired). Restoring a session at startup does NOT
+         * set this, so a PIN-locked profile stays gated until the user enters it.
+         */
+        this._unlocked = false;
     }
 
     // ========================================================================
@@ -127,8 +139,50 @@ class SmartHubManager {
         }
 
         // Wire into auth events for ongoing session management.
-        eventBus.on('auth:login', () => this._startRefreshCycle());
-        eventBus.on('auth:logout', () => this._stopRefreshCycle());
+        eventBus.on('auth:login', () => {
+            // A real login/switch means the active profile is now unlocked.
+            this._unlocked = true;
+            this._startRefreshCycle();
+
+            // Replay any deep link that was held back for the PIN gate. Deferred
+            // so it runs AFTER ProfilesPage._switchToUser's own navigate('/home'),
+            // otherwise that would clobber our details navigation.
+            if (this._pendingDeepLink) {
+                const target = this._pendingDeepLink;
+                this._pendingDeepLink = null;
+                log.info('Replaying held deep link after PIN unlock');
+                setTimeout(() => this._navigateToItem(target), 0);
+            }
+        });
+        eventBus.on('auth:logout', () => {
+            // Re-lock: the next entry into a PIN profile must re-prompt.
+            this._unlocked = false;
+            this._pendingDeepLink = null;
+            this._stopRefreshCycle();
+        });
+
+        // ── Playback end — refresh tiles ────────────────────────────────
+        // ── Playback end / stop — refresh tiles ─────────────────────────
+        // When the user finishes watching or stops an item, the Continue Watching
+        // and Next Up data may have changed. We listen to both 'player:ended' (natural completion)
+        // and 'player:stopped' (user backing out or manually stopping) to cover all exit paths.
+        //
+        // We introduce a 2-second delay before calling update() to ensure the Jellyfin
+        // server has fully received, processed, and committed the playback stop report
+        // before we query the fresh lists. This avoids fetching stale data due to network race conditions.
+        const handlePlaybackFinished = () => {
+            if (this._cycleActive) {
+                log.info('Playback finished or stopped — scheduling Smart Hub preview refresh in 2s');
+                setTimeout(() => {
+                    if (this._cycleActive) {
+                        this.update();
+                    }
+                }, 2000);
+            }
+        };
+
+        eventBus.on('player:ended', handlePlaybackFinished);
+        eventBus.on('player:stopped', handlePlaybackFinished);
     }
 
     /**
@@ -173,28 +227,52 @@ class SmartHubManager {
                     return;
                 }
 
-                /* Establish /home as the Back-key destination before navigating
-                 * to the content. Use replace:true so the router doesn't record
-                 * an empty "previous page" entry before home. */
-                router.navigate('/home', { replace: true });
-
-                if (actionData.type === 'episode') {
-                    /* For episodes, push the parent series into history so the
-                     * user can navigate back up the series → season → episode
-                     * hierarchy naturally via the Back key. */
-                    if (actionData.seriesid) {
-                        router.navigate(`/details/${actionData.seriesid}`);
-                    }
-                    router.navigate(`/details/${actionData.id}`);
-                } else {
-                    /* Movies — navigate straight to the details page. */
-                    router.navigate(`/details/${actionData.id}`);
+                /* PIN gate: a deep link would otherwise jump straight into the
+                 * restored profile's content, bypassing the per-profile PIN. If
+                 * the active profile is PIN-locked and hasn't been unlocked this
+                 * run, hold the target and send the user to the profile picker;
+                 * the auth:login handler replays it once the PIN is entered. */
+                const activeUserId = auth.getCurrentUser()?.Id;
+                if (activeUserId && pinManager.hasPin(activeUserId) && !this._unlocked) {
+                    log.info('Deep link held — active profile is PIN-locked; routing to profile picker');
+                    this._pendingDeepLink = actionData;
+                    router.navigate('/profiles', { replace: true });
+                    return;
                 }
 
+                this._navigateToItem(actionData);
                 return; // Payload consumed — stop searching data entries.
             }
         } catch (e) {
             log.error('Deep link handling threw an exception:', e);
+        }
+    }
+
+    /**
+     * Navigate to a deep-link target, establishing /home as the Back-key base
+     * first (Samsung Return Key Policy). Episodes also push the parent series so
+     * Back walks the series → episode hierarchy.
+     *
+     * @param {{ id: string, type?: string, seriesid?: string }} actionData
+     * @private
+     */
+    _navigateToItem(actionData) {
+        /* Establish /home as the Back-key destination before navigating
+         * to the content. Use replace:true so the router doesn't record
+         * an empty "previous page" entry before home. */
+        router.navigate('/home', { replace: true });
+
+        if (actionData.type === 'episode') {
+            /* For episodes, push the parent series into history so the
+             * user can navigate back up the series → season → episode
+             * hierarchy naturally via the Back key. */
+            if (actionData.seriesid) {
+                router.navigate(`/details/${actionData.seriesid}`);
+            }
+            router.navigate(`/details/${actionData.id}`);
+        } else {
+            /* Movies — navigate straight to the details page. */
+            router.navigate(`/details/${actionData.id}`);
         }
     }
 
@@ -208,40 +286,168 @@ class SmartHubManager {
      */
     async update() {
         /* Guard against concurrent runs (exit-time race with the timer). */
+        // If an update process is already active, ignore this request to avoid
+        // concurrent overlapping fetches on slow hardware.
         if (this._updating) {
             log.debug('Update already running — debounced');
             return;
         }
 
         /* Skip if no active auth session exists yet. */
+        // Smart Hub updates require access token and user credentials to query the server
         if (!state.get('user:authenticated')) {
             log.debug('Not authenticated — skipping Smart Hub update');
             return;
         }
 
+        // Lock the updating process
         this._updating = true;
 
         try {
             log.info('Starting Smart Hub data fetch...');
+            let mergedItems = [];
 
-            /* Run both API calls concurrently — they are fully independent. */
-            const [resumeResult, nextUpResult] = await Promise.all([
-                api.getResumeItems({
-                    Limit: RESUME_LIMIT,
-                    ImageTypeLimit: 1,
-                    EnableImageTypes: 'Primary,Backdrop,Thumb',
-                    EnableTotalRecordCount: false
-                }),
-                api.getNextUp({
-                    Limit: NEXT_UP_LIMIT,
-                    ImageTypeLimit: 1,
-                    EnableImageTypes: 'Primary,Backdrop,Thumb',
-                    EnableTotalRecordCount: false
-                })
-            ]);
+            // ─── Phase 1: Try server-side Litefin plugin first ─────────────────
+            // Query the custom endpoint provided by our Litefin plugin.
+            // When using the plugin, we fetch up to 10 pre-merged, deduplicated,
+            // and chronologically sorted items directly from the server.
+            try {
+                log.info('Attempting to fetch pre-merged continue/next-up items from Litefin plugin');
+                const response = await api.getMergedRows({ limit: 10 });
+                if (response && response.Items && response.Items.length > 0) {
+                    log.info('Successfully fetched merged items from server-side Litefin plugin');
+                    mergedItems = response.Items.slice(0, 10);
+                }
+            } catch (err) {
+                // Plugin is not installed or returned an error; fallback to client-side logic
+                log.warn('Litefin plugin endpoint failed or not installed. Falling back to client-side merge:', err);
+            }
 
-            /* Build the Samsung-schema JSON from the raw Jellyfin items. */
-            const previewJson = this._buildPreviewJson(resumeResult?.Items || [], nextUpResult?.Items || []);
+            // ─── Phase 2: Fallback to client-side merging (5 and 5) ─────────────
+            // If the server-side plugin didn't return any items, we perform
+            // a client-side merge by fetching 5 resume items and 5 next-up items.
+            if (mergedItems.length === 0) {
+                log.info('Falling back to client-side merge (5 and 5 items)');
+
+                // Fetch both lists in parallel to minimize network roundtrips
+                const [resumeRes, nextUpRes] = await Promise.all([
+                    api.getResumeItems({
+                        Limit: 5,
+                        ImageTypeLimit: 1,
+                        EnableImageTypes: 'Primary,Backdrop,Thumb',
+                        EnableTotalRecordCount: false
+                    }),
+                    (async () => {
+                        // Extract Next Up max days filter from preferences, defaults to 365
+                        const maxDays = parseInt(storage.getItem('pref:nextUpMaxDays'), 10);
+                        const daysLimit = isNaN(maxDays) ? 365 : maxDays;
+                        const params = {
+                            Limit: 5,
+                            ImageTypeLimit: 1,
+                            EnableImageTypes: 'Primary,Backdrop,Thumb',
+                            EnableTotalRecordCount: false
+                        };
+
+                        // Apply the cutoff date constraint if configured
+                        if (daysLimit > 0) {
+                            const cutoff = new Date();
+                            cutoff.setDate(cutoff.getDate() - daysLimit);
+                            params.NextUpDateCutoff = cutoff.toISOString();
+                        }
+                        return api.getNextUp(params);
+                    })()
+                ]);
+
+                // Map items and tag them so we can distinguish them during sorting
+                const resumeItems = (resumeRes?.Items || []).map((item) => ({
+                    ...item,
+                    _isResume: true
+                }));
+
+                const nextUpItems = (nextUpRes?.Items || [])
+                    .filter((item) => {
+                        // Filter out next-up items that have already been partially played,
+                        // as they will already be included in the continue watching list.
+                        const position = item.UserData?.PlaybackPositionTicks || 0;
+                        return position === 0;
+                    })
+                    .map((item) => ({
+                        ...item,
+                        _isResume: false
+                    }));
+
+                // Fetch series last played dates so next-up items can be sorted
+                // chronologically relative to when the show was last watched.
+                const nextUpSeriesIds = nextUpItems.map((item) => item.SeriesId).filter(Boolean);
+                const seriesLastPlayedMap = {};
+
+                if (nextUpSeriesIds.length > 0) {
+                    try {
+                        const uniqueSeriesIds = [...new Set(nextUpSeriesIds)];
+                        const activeEpisodesRes = await api.getItems({
+                            SeriesIds: uniqueSeriesIds.join(','),
+                            IncludeItemTypes: 'Episode',
+                            SortBy: 'DatePlayed',
+                            SortOrder: 'Descending',
+                            Fields: 'LastPlayedDate',
+                            Recursive: true,
+                            Limit: 100
+                        });
+
+                        const activeEpisodes = activeEpisodesRes?.Items || [];
+                        for (const ep of activeEpisodes) {
+                            const seriesId = ep.SeriesId;
+                            const lastPlayed = ep.UserData?.LastPlayedDate;
+                            if (seriesId && lastPlayed && !seriesLastPlayedMap[seriesId]) {
+                                seriesLastPlayedMap[seriesId] = new Date(lastPlayed).getTime();
+                            }
+                        }
+                    } catch (err) {
+                        log.warn('Failed to batch-fetch next-up parent activity dates:', err);
+                    }
+                }
+
+                // Combine both lists and remove duplicate entries by ID
+                const combined = [...resumeItems, ...nextUpItems];
+                const seen = new Set();
+                const deduplicated = combined.filter((item) => {
+                    if (seen.has(item.Id)) return false;
+                    seen.add(item.Id);
+                    return true;
+                });
+
+                // Chronologically sort the merged items to match Plex-style layout
+                deduplicated.sort((a, b) => {
+                    let timeA = 0;
+                    if (a._isResume && a.UserData?.LastPlayedDate) {
+                        timeA = new Date(a.UserData.LastPlayedDate).getTime();
+                    } else if (a.SeriesId && seriesLastPlayedMap[a.SeriesId]) {
+                        timeA = seriesLastPlayedMap[a.SeriesId];
+                    } else if (a.UserData?.LastPlayedDate) {
+                        timeA = new Date(a.UserData.LastPlayedDate).getTime();
+                    } else {
+                        timeA = new Date(a.DateCreated || 0).getTime();
+                    }
+
+                    let timeB = 0;
+                    if (b._isResume && b.UserData?.LastPlayedDate) {
+                        timeB = new Date(b.UserData.LastPlayedDate).getTime();
+                    } else if (b.SeriesId && seriesLastPlayedMap[b.SeriesId]) {
+                        timeB = seriesLastPlayedMap[b.SeriesId];
+                    } else if (b.UserData?.LastPlayedDate) {
+                        timeB = new Date(b.UserData.LastPlayedDate).getTime();
+                    } else {
+                        timeB = new Date(b.DateCreated || 0).getTime();
+                    }
+
+                    return timeB - timeA;
+                });
+
+                mergedItems = deduplicated;
+            }
+
+            /* Build the Samsung-schema JSON from the merged items list. */
+            const previewJson = this._buildPreviewJson(mergedItems);
 
             /* Cache in memory so future callers can inspect last-known state. */
             this._cachedJson = previewJson;
@@ -335,36 +541,39 @@ class SmartHubManager {
      * Output schema: { sections: [{ title: string, tiles: TileObject[] }] }
      * Sections with zero valid tiles are omitted entirely.
      *
-     * @param {Object[]} resumeItems - Items from /Users/{id}/Items/Resume
-     * @param {Object[]} nextUpItems - Items from /Shows/NextUp
+     * @param {Object[]} mergedItems - List of merged Continue Watching and Next Up items
      * @returns {{ sections: Object[] }}
      * @private
      */
-    _buildPreviewJson(resumeItems, nextUpItems) {
+    _buildPreviewJson(mergedItems) {
+        // Prepare list of sections to return to Samsung Smart Hub
         const sections = [];
 
-        /* ── Next Up ──────────────────────────────────────────────────────
-         * Shown first — upcoming episodes feel more timely and are the
-         * most common entry point after a series marathon. */
-        const nextUpTiles = nextUpItems
-            .slice(0, NEXT_UP_LIMIT)
-            .map((item) => this._buildTile(item))
-            .filter(Boolean); /* _buildTile returns null for unsupported types. */
+        /* ── Dedicated Section per Item ──────────────────────────────────
+         * Create an individual section for each item in the chronologically
+         * sorted list. For TV episodes, the section title is set to the SeriesName
+         * (e.g. "Hell's Paradise"), and for movies it is set to the Movie Name
+         * (e.g. "Ex Machina"). This guarantees that the items appear in their exact
+         * sorted section order on the TV home screen UI. */
+        for (const item of mergedItems) {
+            // Build the Samsung tile object for the item
+            const tile = this._buildTile(item);
 
-        if (nextUpTiles.length > 0) {
-            sections.push({ title: 'Next Up', tiles: nextUpTiles });
-        }
+            // Skip items that cannot be represented cleanly (e.g., missing thumbnail)
+            if (!tile) continue;
 
-        /* ── Continue Watching ───────────────────────────────────────────
-         * Mid-progress items go second — they are resumable movies and
-         * partially-watched episodes. */
-        const resumeTiles = resumeItems
-            .slice(0, RESUME_LIMIT)
-            .map((item) => this._buildTile(item))
-            .filter(Boolean);
+            // Determine the section title based on media semantics
+            // TV episodes use the parent series name; Movies use their own title
+            const sectionTitle =
+                item.Type === 'Episode' && item.SeriesName
+                    ? item.SeriesName
+                    : (item.Name || 'Continue Watching');
 
-        if (resumeTiles.length > 0) {
-            sections.push({ title: 'Continue Watching', tiles: resumeTiles });
+            // Add a dedicated section containing this item's tile
+            sections.push({
+                title: sectionTitle,
+                tiles: [tile]
+            });
         }
 
         return { sections };
@@ -555,7 +764,7 @@ class SmartHubManager {
                 if (localPort !== null && listenerId !== null) {
                     try {
                         localPort.removeMessagePortListener(listenerId);
-                    } catch (_) {}
+                    } catch (_) { }
                     listenerId = null;
                 }
             };

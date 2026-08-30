@@ -1,5 +1,10 @@
+// Base overlay implementation from which SettingsMenu inherits controls.
 import BaseMenu from './BaseMenu.js';
-import { ICONS } from './icons.js';
+
+// Global SVG icons utility library housing all outline and filled vectors.
+import { osdIcons } from '../../utils/Icons.js';
+
+// Localization tools to translate layout terms.
 import { i18n } from '../../utils/i18n.js';
 
 /**
@@ -66,15 +71,16 @@ export default class SettingsMenu extends BaseMenu {
             });
         }
 
+        // Settings items configuration containing titles, icons, and event names.
         const options = [
-            { id: 'aspectRatio', label: i18n.t('AspectRatio'), key: 'AspectRatio', icon: ICONS.aspectRatio },
-            { id: 'playbackSpeed', label: i18n.t('PlaybackRate'), key: 'PlaybackRate', icon: ICONS.speed },
-            { id: 'quality', label: i18n.t('Quality'), key: 'Quality', icon: ICONS.quality },
-            { id: 'playbackMode', label: i18n.t('PlaybackMode'), key: 'PlaybackMode', icon: ICONS.layers },
-            { id: 'repeatMode', label: i18n.t('RepeatMode'), key: 'RepeatMode', icon: ICONS.repeat },
-            { id: 'playbackInfo', label: i18n.t('PlaybackData'), key: 'PlaybackData', icon: ICONS.info },
-            { id: 'subtitleOffset', label: i18n.t('SubtitleOffset'), key: 'SubtitleOffset', icon: ICONS.sync },
-            { id: 'subtitleAppearance', label: i18n.t('SubtitleAppearance'), key: 'SubtitleAppearance', icon: ICONS.palette }
+            { id: 'aspectRatio', label: i18n.t('AspectRatio'), key: 'AspectRatio', icon: osdIcons.aspectRatio },
+            { id: 'playbackSpeed', label: i18n.t('PlaybackRate'), key: 'PlaybackRate', icon: osdIcons.speed },
+            { id: 'quality', label: i18n.t('Quality'), key: 'Quality', icon: osdIcons.quality },
+            { id: 'playbackMode', label: i18n.t('PlaybackMode'), key: 'PlaybackMode', icon: osdIcons.layers },
+            { id: 'repeatMode', label: i18n.t('RepeatMode'), key: 'RepeatMode', icon: osdIcons.repeat },
+            { id: 'subtitleOffset', label: i18n.t('SubtitleOffset'), key: 'SubtitleOffset', icon: osdIcons.sync },
+            { id: 'subtitleAppearance', label: i18n.t('SubtitleAppearance'), key: 'SubtitleAppearance', icon: osdIcons.palette },
+            { id: 'playbackInfo', label: i18n.t('PlaybackData'), key: 'PlaybackData', icon: osdIcons.info }
         ];
 
         const optionsHtml = options.map((opt, i) => `
@@ -96,6 +102,19 @@ export default class SettingsMenu extends BaseMenu {
         this.$el.querySelectorAll('.track-item').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                /*
+                 * ================================================================
+                 * TIZEN TV CLICK ORIGIN GUARD
+                 * ================================================================
+                 * Discard synthetic focus-clicks and Enter-synthesized clicks (detail === 0
+                 * or clientX === 0 && clientY === 0). D-pad Enter is handled exclusively
+                 * via handleKey() -> handleEnter().
+                 * ================================================================
+                 */
+                if (btn._programmaticFocus) return;
+                if (e.detail === 0) return;
+                if (e.clientX === 0 && e.clientY === 0) return;
+
                 this.focusIndex = parseInt(btn.dataset.menuIndex);
                 this.handleEnter();
             });
@@ -106,7 +125,7 @@ export default class SettingsMenu extends BaseMenu {
 
     handleKey(key) {
         const options = this.$el?.querySelectorAll('.track-option') || [];
-        
+
         switch (key) {
             case 'up':
                 if (this.focusIndex > 0) {
@@ -125,7 +144,7 @@ export default class SettingsMenu extends BaseMenu {
                 this.updateFocus();
                 return true;
             case 'enter':
-                // Rely on native click event which is triggered by the browser on Enter
+                this.handleEnter();
                 return true;
             case 'back':
             case 'left':
@@ -142,7 +161,7 @@ export default class SettingsMenu extends BaseMenu {
         if (!focusedOption) return;
 
         const actionId = focusedOption.dataset.id;
-        
+
         // Use closeMenu to cleanup focus properly
         this.osd.closeMenu();
 
@@ -181,7 +200,9 @@ export default class SettingsMenu extends BaseMenu {
             const isFocused = i === this.focusIndex;
             opt.classList.toggle('focused', isFocused);
             if (isFocused) {
-                opt.focus();
+                opt._programmaticFocus = true;
+                opt.focus({ preventScroll: true });
+                setTimeout(() => { opt._programmaticFocus = false; }, 0);
                 opt.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         });
