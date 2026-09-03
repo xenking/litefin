@@ -710,12 +710,6 @@ class PlayerPage extends Page {
             };
             eventBus.on('remote:userdatachanged', this._onRemoteUserDataChanged);
 
-            // Channel Up/Down for Live TV
-            this._onChannelUp = () => this._onRemoteChannelUp();
-            eventBus.on('key:channelUp', lockCheck(this._onChannelUp));
-
-            this._onChannelDown = () => this._onRemoteChannelDown();
-            eventBus.on('key:channelDown', lockCheck(this._onChannelDown));
             // ================================================================
             // MAGIC CURSOR SUPPORT (WebOS / Tizen Pointer)
             // ================================================================
@@ -3913,8 +3907,6 @@ class PlayerPage extends Page {
         if (this._onRemoteSubtitle) eventBus.off('remote:subtitle', this._onRemoteSubtitle);
         if (this._onRemoteQueueUpdate) eventBus.off('remote:queueupdate', this._onRemoteQueueUpdate);
         if (this._onRemoteUserDataChanged) eventBus.off('remote:userdatachanged', this._onRemoteUserDataChanged);
-        if (this._onChannelUp) eventBus.off('key:channelUp', this._onChannelUp);
-        if (this._onChannelDown) eventBus.off('key:channelDown', this._onChannelDown);
 
         // Clean up global lock listeners
         if (this._onGlobalKeyDown) {
